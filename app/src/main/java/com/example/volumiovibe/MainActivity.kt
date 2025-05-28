@@ -104,11 +104,12 @@ class MainActivity : ComponentActivity() {
     fun VolumioControlScreen() {
         var statusText by remember { mutableStateOf("Volumio Status: Disconnected") }
         val coroutineScope = rememberCoroutineScope()
+        val context = LocalContext.current
 
         LaunchedEffect(Unit) {
             while (true) {
                 statusText = getStatus()
-                delay(5000) // Update every 5 seconds
+                delay(5000)
             }
         }
 
@@ -149,6 +150,12 @@ class MainActivity : ComponentActivity() {
                     coroutineScope.launch { statusText = getStatus() }
                 }) {
                     Text("Previous")
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+                Button(onClick = {
+                    context.startActivity(android.content.Intent(context, SearchActivity::class.java))
+                }) {
+                    Text("Search")
                 }
             }
         }
