@@ -1,97 +1,114 @@
 package com.example.volumiovibe
 
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.material3.Button
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import io.socket.client.IO
-import io.socket.client.Socket
+import kotlinx.coroutines.*
+import okhttp3.*
 import org.json.JSONObject
-import java.net.URISyntaxException
 
 class MainActivity : ComponentActivity() {
-    private var socket: Socket? = null
-    private val volumioUrl = "http://192.168.1.100:3000" // Replace with your Pi 4's IP
+    private val volumioUrl = "http://volumio.local:3000" // Use mDNS
+    private val client = OkHttpClient()
+    private val TAG = "VolumioMainActivity"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            VolumioControlScreen()
-        }
-        connectToVolumio()
+        setContent { VolumioControlScreen() }
+        testRestApi()
     }
 
-    private fun connectToVolumio() {
+    private fun sendCommand(command: String) {
+        CoroutineScope(Dispatchers.IO).launch {
+            val url = "$volumioUrl/api/v1/commands/?cmd=$command"
+            val request = Request.Builder().url(url).build()
+            try {
+                val response = client.newCall(request).execute()
+                withContext(Dispatchers.Main) {
+                    if (response.isSuccessful) {
+                        Log.d(TAG, "Sent $command")
+                        if (command == "play") {
+                            Toast.makeText(this@MainActivity, "Playin’, yo!", Toast.LENGTH_SHORT).show()
+                        }
+                    } else {
+                        Log.e(TAG, "$command failed: ${response.code}")
+                        Toast.makeText(this@MainActivity, "$command fucked up!", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Log.e(TAG, "$command error: $e")
+                    Toast.makeText(this@MainActivity, "$command broke! $e", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private suspend fun getStatus(): String = withContext(Dispatchers.IO) {
+        val url = "$volumioUrl/api/v1/getState"
+        val request = Request.Builder().url(url).build()
         try {
-            socket = IO.socket(volumioUrl)
-            socket?.on(Socket.EVENT_CONNECT) {
-                runOnUiThread {
-                    Toast.makeText(this, "Connected to Volumio, yo!", Toast.LENGTH_SHORT).show()
-                }
+            val response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                val json = response.body?.string() ?: return@withContext "Volumio Status: Unknown"
+                val state = JSONObject(json)
+                val status = state.getString("status")
+                val title = state.optString("title", "Nothin’ playin’")
+                val artist = state.optString("artist", "")
+                Log.d(TAG, "Updated: $status, $title by $artist")
+                "Volumio Status: $status\nNow Playin’: $title by $artist"
+            } else {
+                Log.e(TAG, "Status failed: ${response.code}")
+                "Volumio Status: Error ${response.code}"
             }
-            socket?.on(Socket.EVENT_DISCONNECT) {
-                runOnUiThread {
-                    Toast.makeText(this, "Volumio disconnected, damn!", Toast.LENGTH_SHORT).show()
-                }
-            }
-            socket?.connect()
-        } catch (e: URISyntaxException) {
-            e.printStackTrace()
-            runOnUiThread {
-                Toast.makeText(this, "Can’t connect to Volumio, shit’s broke!", Toast.LENGTH_LONG).show()
-            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Status error: $e")
+            "Volumio Status: Broke! $e"
         }
     }
 
-    private fun sendVolumioCommand(command: String, data: JSONObject? = null) {
-        if (socket?.connected() == true) {
-            socket?.emit(command, data)
-        } else {
-            runOnUiThread {
-                Toast.makeText(this, "Ain’t connected to Volumio, fam!", Toast.LENGTH_SHORT).show()
+    private fun testRestApi() {
+        CoroutineScope(Dispatchers.IO).launch {
+            val url = "$volumioUrl/api/v1/getState"
+            val request = Request.Builder().url(url).build()
+            try {
+                val response = client.newCall(request).execute()
+                withContext(Dispatchers.Main) {
+                    if (response.isSuccessful) {
+                        Log.d(TAG, "REST test: ${response.body?.string()}")
+                        Toast.makeText(this@MainActivity, "Connected to Volumio, yo!", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Log.e(TAG, "REST test failed: ${response.code}")
+                        Toast.makeText(this@MainActivity, "Can’t connect!", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    Log.e(TAG, "REST test error: $e")
+                    Toast.makeText(this@MainActivity, "Connection broke!", Toast.LENGTH_LONG).show()
+                }
             }
         }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        socket?.disconnect()
     }
 
     @Composable
     fun VolumioControlScreen() {
         var statusText by remember { mutableStateOf("Volumio Status: Disconnected") }
-        val context = LocalContext.current
+        val coroutineScope = rememberCoroutineScope()
 
-        // Listen for pushState to update status
-        socket?.on("pushState") { args ->
-            val state = args[0] as JSONObject
-            try {
-                val status = state.getString("status")
-                val title = state.optString("title", "Nothin’ playin’")
-                val artist = state.optString("artist", "")
-                runOnUiThread {
-                    statusText = "Volumio Status: $status\nNow Playin’: $title by $artist"
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
+        LaunchedEffect(Unit) {
+            while (true) {
+                statusText = getStatus()
+                delay(5000) // Update every 5 seconds
             }
         }
 
@@ -106,19 +123,31 @@ class MainActivity : ComponentActivity() {
                     style = MaterialTheme.typography.bodyLarge
                 )
                 Spacer(modifier = Modifier.height(20.dp))
-                Button(onClick = { sendVolumioCommand("play") }) {
+                Button(onClick = {
+                    sendCommand("play")
+                    coroutineScope.launch { statusText = getStatus() }
+                }) {
                     Text("Play")
                 }
                 Spacer(modifier = Modifier.height(10.dp))
-                Button(onClick = { sendVolumioCommand("pause") }) {
+                Button(onClick = {
+                    sendCommand("pause")
+                    coroutineScope.launch { statusText = getStatus() }
+                }) {
                     Text("Pause")
                 }
                 Spacer(modifier = Modifier.height(10.dp))
-                Button(onClick = { sendVolumioCommand("next") }) {
+                Button(onClick = {
+                    sendCommand("next")
+                    coroutineScope.launch { statusText = getStatus() }
+                }) {
                     Text("Next")
                 }
                 Spacer(modifier = Modifier.height(10.dp))
-                Button(onClick = { sendVolumioCommand("previous") }) {
+                Button(onClick = {
+                    sendCommand("prev")
+                    coroutineScope.launch { statusText = getStatus() }
+                }) {
                     Text("Previous")
                 }
             }
