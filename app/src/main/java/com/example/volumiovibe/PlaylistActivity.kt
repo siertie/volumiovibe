@@ -55,14 +55,14 @@ class PlaylistViewModel : ViewModel() {
     var playlists by mutableStateOf<List<Playlist>>(emptyList())
     var selectedPlaylist by mutableStateOf<Playlist?>(null)
     var vibeInput by mutableStateOf("")
-    var selectedVibe by mutableStateOf("Choose a vibe...")
-    var era by mutableStateOf("Any Era")
-    var language by mutableStateOf("Any Language")
-    var instrument by mutableStateOf("None")
+    var selectedVibe by mutableStateOf(GrokConfig.VIBE_OPTIONS.first())
+    var era by mutableStateOf(GrokConfig.ERA_OPTIONS.first())
+    var language by mutableStateOf(GrokConfig.LANGUAGE_OPTIONS.first())
+    var instrument by mutableStateOf(GrokConfig.INSTRUMENT_OPTIONS.first())
     var playlistName by mutableStateOf("")
     var artists by mutableStateOf("")
-    var numSongs by mutableStateOf("20")
-    var maxSongsPerArtist by mutableStateOf("2")
+    var numSongs by mutableStateOf(GrokConfig.DEFAULT_NUM_SONGS)
+    var maxSongsPerArtist by mutableStateOf(GrokConfig.DEFAULT_MAX_SONGS_PER_ARTIST)
     var isLoading by mutableStateOf(false)
     var aiSuggestions by mutableStateOf<List<Track>>(emptyList())
 
@@ -280,11 +280,11 @@ class PlaylistViewModel : ViewModel() {
             try {
                 val finalPlaylistName = if (playlistName.isBlank()) {
                     xAiApi.generatePlaylistName(
-                        vibe = if (selectedVibe != "Choose a vibe...") selectedVibe else vibeInput,
+                        vibe = if (selectedVibe != GrokConfig.VIBE_OPTIONS.first()) selectedVibe else vibeInput,
                         artists = artists.takeIf { it.isNotBlank() },
-                        era = era.takeIf { it != "Any Era" },
-                        instrument = instrument.takeIf { it != "None" },
-                        language = language.takeIf { it != "Any Language" }
+                        era = era.takeIf { it != GrokConfig.ERA_OPTIONS.first() },
+                        instrument = instrument.takeIf { it != GrokConfig.INSTRUMENT_OPTIONS.first() },
+                        language = language.takeIf { it != GrokConfig.LANGUAGE_OPTIONS.first() }
                     )
                 } else {
                     playlistName
@@ -303,28 +303,28 @@ class PlaylistViewModel : ViewModel() {
                     Log.d(TAG, "Playlist $finalPlaylistName found in playlists!")
                 }
 
-                val numSongsInt = numSongs.toIntOrNull() ?: 20
-                val maxSongsPerArtistInt = if (numSongsInt < 10) 1 else maxSongsPerArtist.toIntOrNull() ?: 2
+                val numSongsInt = numSongs.toIntOrNull() ?: GrokConfig.DEFAULT_NUM_SONGS.toInt()
+                val maxSongsPerArtistInt = if (numSongsInt < 10) 1 else maxSongsPerArtist.toIntOrNull() ?: GrokConfig.DEFAULT_MAX_SONGS_PER_ARTIST.toInt()
                 val songList = xAiApi.generateSongList(
-                    vibe = if (selectedVibe != "Choose a vibe...") selectedVibe else vibeInput,
+                    vibe = if (selectedVibe != GrokConfig.VIBE_OPTIONS.first()) selectedVibe else vibeInput,
                     numSongs = numSongsInt,
                     artists = artists.takeIf { it.isNotBlank() },
-                    era = era.takeIf { it != "Any Era" },
+                    era = era.takeIf { it != GrokConfig.ERA_OPTIONS.first() },
                     maxSongsPerArtist = maxSongsPerArtistInt,
-                    instrument = instrument.takeIf { it != "None" },
-                    language = language.takeIf { it != "Any Language" }
+                    instrument = instrument.takeIf { it != GrokConfig.INSTRUMENT_OPTIONS.first() },
+                    language = language.takeIf { it != GrokConfig.LANGUAGE_OPTIONS.first() }
                 ) ?: throw Exception("No songs from xAI API")
 
                 val tracks = songList.split("\n").mapNotNull { line ->
                     val parts = line.split(" - ", limit = 2)
                     if (parts.size == 2) parts[0].trim() to parts[1].trim() else null
-                }.take(numSongsInt) // Enforce numSongs limit
+                }.take(numSongsInt)
                 Log.d(TAG, "Song list: ${tracks.size} tracks: $tracks")
 
                 var addedTracks = 0
                 val addedUris = mutableSetOf<String>()
                 val artistCounts = mutableMapOf<String, Int>()
-                val trackKeys = mutableSetOf<String>() // For deduplication
+                val trackKeys = mutableSetOf<String>()
                 aiSuggestions = emptyList()
                 for ((artist, title) in tracks) {
                     if (addedTracks >= numSongsInt) break
@@ -333,7 +333,7 @@ class PlaylistViewModel : ViewModel() {
                     Log.d(TAG, "Emitted search: $query")
                     val results = waitForSearchResults()
                     if (results.isNotEmpty()) {
-                        val track = results.firstOrNull { it.type == "song" } // Only songs, no albums
+                        val track = results.firstOrNull { it.type == "song" }
                         if (track != null) {
                             val trackKey = "${track.artist}:${track.title}".lowercase()
                             if (!trackKeys.contains(trackKey)) {
@@ -345,7 +345,7 @@ class PlaylistViewModel : ViewModel() {
                                         artistCounts[track.artist] = currentCount + 1
                                         trackKeys.add(trackKey)
                                         Log.d(TAG, "Added track: ${track.title} by ${track.artist}, URI: ${track.uri}, Type: ${track.type}, Artist count: ${artistCounts[track.artist]}")
-                                        delay(500) // Avoid duplicate emits
+                                        delay(500)
                                     } else {
                                         Log.w(TAG, "Skipped duplicate URI: ${track.uri}")
                                     }
@@ -393,11 +393,14 @@ class XAiApi(private val apiKey: String) {
         instrument: String? = null,
         language: String? = null
     ): String = withContext(Dispatchers.IO) {
-        val artistText = artists?.let { "Artists like $it, " } ?: ""
-        val eraText = era?.let { "From the $it, " } ?: ""
-        val instrumentText = instrument?.let { "Featuring the $it, " } ?: ""
-        val languageText = language?.let { "In $it, " } ?: ""
-        val prompt = "Yo Grok, gimme a dope playlist name for $vibe. ${artistText}${eraText}${instrumentText}${languageText}Keep it short, max 20 chars, and hella fire. No extra fluff, just the name!"
+        val artistText = GrokConfig.getArtistText(artists)
+        val eraText = GrokConfig.getEraText(era)
+        val instrumentText = GrokConfig.getInstrumentText(instrument)
+        val languageText = GrokConfig.getLanguageText(language)
+        val prompt = String.format(
+            GrokConfig.PLAYLIST_NAME_PROMPT,
+            vibe, artistText, eraText, instrumentText, languageText, GrokConfig.MAX_PLAYLIST_NAME_LENGTH
+        )
         val payload = JSONObject().apply {
             put("messages", JSONArray().apply {
                 put(JSONObject().apply {
@@ -437,12 +440,15 @@ class XAiApi(private val apiKey: String) {
         instrument: String? = null,
         language: String? = null
     ): String? = withContext(Dispatchers.IO) {
-        val artistText = artists?.let { "Inspired by artists like $it, " } ?: ""
-        val eraText = era?.let { "From the $it, " } ?: ""
-        val maxArtistText = "Max $maxSongsPerArtist songs per artist, "
-        val instrumentText = instrument?.let { "Songs MUST have the $it as a PRIMARY, AUDIBLE instrument, central to the track’s sound, " } ?: ""
-        val languageText = language?.let { "In $it, " } ?: ""
-        val prompt = "Yo Grok, you my DJ! Gimme a list of $numSongs songs for $vibe. ${artistText}${eraText}${maxArtistText}${instrumentText}${languageText}Format it like 'Artist - Title' with each song on a new line. No extra bullshit, just the list."
+        val artistText = GrokConfig.getArtistText(artists)
+        val eraText = GrokConfig.getEraText(era)
+        val maxArtistText = GrokConfig.getMaxArtistText(maxSongsPerArtist)
+        val instrumentText = GrokConfig.getInstrumentText(instrument)
+        val languageText = GrokConfig.getLanguageText(language)
+        val prompt = String.format(
+            GrokConfig.SONG_LIST_PROMPT,
+            numSongs, vibe, artistText, eraText, maxArtistText, instrumentText, languageText
+        )
         val payload = JSONObject().apply {
             put("messages", JSONArray().apply {
                 put(JSONObject().apply {
@@ -478,13 +484,10 @@ class XAiApi(private val apiKey: String) {
 @Composable
 fun PlaylistScreen(viewModel: PlaylistViewModel) {
     val context = LocalContext.current
-    val vibeOptions = listOf(
-        "Choose a vibe...", "Sad Boi Tears", "Happy as Fuck", "Slow but Smilin’",
-        "Fast Emo Cry Shit", "Punk Rock Rager", "Trap Bangerz", "Stoner Chill"
-    )
-    val eraOptions = listOf("Any Era", "1960s", "1970s", "1980s", "1990s", "2000s", "2010s", "2020s")
-    val languageOptions = listOf("Any Language", "English", "Dutch", "German", "French", "Spanish")
-    val instrumentOptions = listOf("None", "Violin", "Steel Drums", "Contrabass", "Theremin", "Sitar", "Banjo")
+    val vibeOptions = GrokConfig.VIBE_OPTIONS
+    val eraOptions = GrokConfig.ERA_OPTIONS
+    val languageOptions = GrokConfig.LANGUAGE_OPTIONS
+    val instrumentOptions = GrokConfig.INSTRUMENT_OPTIONS
 
     var vibeExpanded by remember { mutableStateOf(false) }
     var eraExpanded by remember { mutableStateOf(false) }
@@ -528,7 +531,7 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
                                 text = { Text(vibe) },
                                 onClick = {
                                     viewModel.selectedVibe = vibe
-                                    viewModel.vibeInput = if (vibe != "Choose a vibe...") vibe else ""
+                                    viewModel.vibeInput = if (vibe != GrokConfig.VIBE_OPTIONS.first()) vibe else ""
                                     vibeExpanded = false
                                 }
                             )
@@ -539,7 +542,7 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
                     value = viewModel.vibeInput,
                     onValueChange = {
                         viewModel.vibeInput = it
-                        viewModel.selectedVibe = "Choose a vibe..."
+                        viewModel.selectedVibe = GrokConfig.VIBE_OPTIONS.first()
                     },
                     label = { Text("Custom Vibe") },
                     modifier = Modifier.fillMaxWidth()
