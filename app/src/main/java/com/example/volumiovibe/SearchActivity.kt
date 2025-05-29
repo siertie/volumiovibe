@@ -17,9 +17,8 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
@@ -57,7 +56,9 @@ class SearchActivity : ComponentActivity() {
             Button(
                 onClick = {
                     coroutineScope.launch {
-                        results = searchTracks(query)
+                        searchTracks(query) { newResults ->
+                            results = newResults
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxWidth()
@@ -70,9 +71,6 @@ class SearchActivity : ComponentActivity() {
                     TrackItem(track = track, onAddToQueue = {
                         coroutineScope.launch {
                             addToQueue(track)
-                            withContext(Dispatchers.Main) {
-                                Toast.makeText(context, "Added ${track.title}, yo!", Toast.LENGTH_SHORT).show()
-                            }
                         }
                     })
                 }
@@ -111,31 +109,78 @@ class SearchActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun searchTracks(query: String): List<Track> = withContext(Dispatchers.IO) {
+    private suspend fun searchTracks(query: String, onResultsReceived: (List<Track>) -> Unit) = withContext(Dispatchers.IO) {
         if (query.isBlank()) {
             withContext(Dispatchers.Main) {
                 Toast.makeText(this@SearchActivity, "Type somethin’, fam!", Toast.LENGTH_SHORT).show()
             }
-            return@withContext emptyList()
+            return@withContext
         }
 
+        if (!WebSocketManager.isConnected()) {
+            Log.e(TAG, "WebSocket not connected for search")
+            withContext(Dispatchers.Main) {
+                Toast.makeText(this@SearchActivity, "WebSocket ain’t connected!", Toast.LENGTH_SHORT).show()
+            }
+            searchTracksFallback(query, onResultsReceived)
+            return@withContext
+        }
+
+        val payload = JSONObject().apply {
+            put("value", query)
+        }
+        WebSocketManager.emit("search", payload) { args ->
+            try {
+                val jsonObject = args[0] as? JSONObject ?: return@emit
+                val lists = jsonObject.optJSONObject("navigation")?.optJSONArray("lists") ?: return@emit
+                val results = mutableListOf<Track>()
+
+                for (i in 0 until lists.length()) {
+                    val list = lists.getJSONObject(i)
+                    if (list.optString("title").contains("Tracks")) {
+                        val items = list.optJSONArray("items") ?: continue
+                        for (j in 0 until items.length()) {
+                            val item = items.getJSONObject(j)
+                            if (item.optString("type") == "song" && item.has("title") && item.has("artist") && item.has("uri")) {
+                                results.add(
+                                    Track(
+                                        title = item.getString("title"),
+                                        artist = item.getString("artist"),
+                                        uri = item.getString("uri"),
+                                        service = item.getString("service")
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+                Log.d(TAG, "Search response: $jsonObject")
+                onResultsReceived(results)
+            } catch (e: Exception) {
+                Log.e(TAG, "Search parse error: $e")
+                Toast.makeText(this@SearchActivity, "Search broke! $e", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private suspend fun searchTracksFallback(query: String, onResultsReceived: (List<Track>) -> Unit) = withContext(Dispatchers.IO) {
         val url = "$volumioUrl/api/v1/search?query=${URLEncoder.encode(query, "UTF-8")}"
         val request = Request.Builder().url(url).build()
         try {
             val response = client.newCall(request).execute()
             if (!response.isSuccessful) {
-                Log.e(TAG, "Search failed: ${response.code}")
+                Log.e(TAG, "REST search failed: ${response.code}")
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@SearchActivity, "Search fucked up!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@SearchActivity, "REST search fucked up!", Toast.LENGTH_SHORT).show()
                 }
-                return@withContext emptyList()
+                return@withContext
             }
 
-            val json = response.body?.string() ?: return@withContext emptyList()
-            Log.d(TAG, "Search response: $json")
+            val json = response.body?.string() ?: return@withContext
+            Log.d(TAG, "REST search response: $json")
             val results = mutableListOf<Track>()
             val jsonObject = JSONObject(json)
-            val lists = jsonObject.optJSONObject("navigation")?.optJSONArray("lists") ?: return@withContext emptyList()
+            val lists = jsonObject.optJSONObject("navigation")?.optJSONArray("lists") ?: return@withContext
 
             for (i in 0 until lists.length()) {
                 val list = lists.getJSONObject(i)
@@ -156,17 +201,41 @@ class SearchActivity : ComponentActivity() {
                     }
                 }
             }
-            results
-        } catch (e: Exception) {
-            Log.e(TAG, "Search error: $e")
             withContext(Dispatchers.Main) {
-                Toast.makeText(this@SearchActivity, "Search broke! $e", Toast.LENGTH_SHORT).show()
+                onResultsReceived(results)
             }
-            emptyList()
+        } catch (e: Exception) {
+            Log.e(TAG, "REST search error: $e")
+            withContext(Dispatchers.Main) {
+                Toast.makeText(this@SearchActivity, "REST search broke! $e", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
     private suspend fun addToQueue(track: Track) = withContext(Dispatchers.IO) {
+        if (!WebSocketManager.isConnected()) {
+            Log.e(TAG, "WebSocket not connected for addToQueue")
+            withContext(Dispatchers.Main) {
+                Toast.makeText(this@SearchActivity, "WebSocket ain’t connected!", Toast.LENGTH_SHORT).show()
+            }
+            addToQueueFallback(track)
+            return@withContext
+        }
+
+        val payload = JSONObject().apply {
+            put("uri", track.uri)
+            put("service", track.service)
+            put("title", track.title)
+            put("artist", track.artist)
+            put("type", "song")
+        }
+        WebSocketManager.emit("addToQueue", payload) { args ->
+            Log.d(TAG, "Add to queue response: ${args.joinToString()}")
+            Toast.makeText(this@SearchActivity, "Added ${track.title}, yo!", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private suspend fun addToQueueFallback(track: Track) = withContext(Dispatchers.IO) {
         val url = "$volumioUrl/api/v1/addToQueue"
         val payload = JSONArray().put(
             JSONObject().apply {
@@ -185,19 +254,21 @@ class SearchActivity : ComponentActivity() {
         try {
             val response = client.newCall(request).execute()
             val responseBody = response.body?.string()
-            Log.d(TAG, "Queue add response for ${track.title} (URI: ${track.uri}, Service: ${track.service}): $responseBody")
+            Log.d(TAG, "REST add to queue response: $responseBody")
             if (!response.isSuccessful) {
-                Log.e(TAG, "Queue add failed: ${response.code}, response: $responseBody")
+                Log.e(TAG, "REST queue add failed: ${response.code}")
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@SearchActivity, "Couldn’t add ${track.title}!", Toast.LENGTH_SHORT).show()
                 }
             } else {
-                Log.d(TAG, "Added ${track.title} to queue")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@SearchActivity, "Added ${track.title}, yo!", Toast.LENGTH_SHORT).show()
+                }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Queue add error: $e")
+            Log.e(TAG, "REST queue add error: $e")
             withContext(Dispatchers.Main) {
-                Toast.makeText(this@SearchActivity, "Queue add broke! $e", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@SearchActivity, "REST queue add broke! $e", Toast.LENGTH_SHORT).show()
             }
         }
     }
