@@ -157,6 +157,12 @@ class MainActivity : ComponentActivity() {
                 }) {
                     Text("Search")
                 }
+                Spacer(modifier = Modifier.height(10.dp))
+                Button(onClick = {
+                    context.startActivity(android.content.Intent(context, QueueActivity::class.java))
+                }) {
+                    Text("Queue")
+                }
             }
         }
     }
