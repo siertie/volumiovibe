@@ -80,11 +80,28 @@ object WebSocketManager {
     fun on(event: String, callback: (Array<Any>) -> Unit) {
         socket?.on(event) { args ->
             CoroutineScope(Dispatchers.Main).launch {
-                Log.d(TAG, "Received $event: ${args.joinToString()}")
+                Log.d(TAG, "Received event $event: ${args.joinToString()}")
                 callback(args)
             }
         }
-        Log.d(TAG, "Registered listener for $event")
+        Log.d(TAG, "Registered listener for event: $event")
+    }
+
+    fun debugAllEvents() {
+        // Log known Volumio events
+        val knownEvents = listOf(
+            "pushListPlaylist", "pushBrowseLibrary", "pushCreatePlaylist", "pushAddToPlaylist",
+            "pushState", "pushQueue", Socket.EVENT_CONNECT, Socket.EVENT_DISCONNECT, Socket.EVENT_CONNECT_ERROR
+        )
+        knownEvents.forEach { event ->
+            socket?.on(event) { args ->
+                CoroutineScope(Dispatchers.Main).launch {
+                    Log.d(TAG, "Debug: Received event $event: ${args.joinToString()}")
+                }
+            }
+        }
+        // No onAny, so we rely on knownEvents and on() logging
+        socket ?: Log.w(TAG, "Socket is null, can’t debug events")
     }
 
     fun onConnectionChange(listener: (Boolean) -> Unit) {
