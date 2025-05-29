@@ -268,21 +268,6 @@ class MainActivity : ComponentActivity() {
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Button(onClick = {
-                    coroutineScope.launch {
-                        if (WebSocketManager.isConnected()) {
-                            WebSocketManager.emit("getState")
-                            Log.d(TAG, "Sent manual getState")
-                        } else {
-                            fetchStateFallback { status, title, artist ->
-                                statusText = "Volumio Status: $status\nNow Playin’: $title by $artist"
-                            }
-                        }
-                    }
-                }) {
-                    Text("Refresh Status")
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Button(onClick = {
                     context.startActivity(Intent(context, SearchActivity::class.java))
                 }) {
                     Text("Search")
@@ -292,6 +277,12 @@ class MainActivity : ComponentActivity() {
                     context.startActivity(Intent(context, QueueActivity::class.java))
                 }) {
                     Text("Queue")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(onClick = {
+                    context.startActivity(Intent(context, PlaylistActivity::class.java))
+                }) {
+                    Text("Playlist")
                 }
             }
         }
