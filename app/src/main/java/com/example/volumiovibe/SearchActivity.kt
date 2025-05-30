@@ -1,5 +1,6 @@
 package com.example.volumiovibe
 
+import android.content.Context
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
@@ -15,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.*
@@ -31,15 +33,45 @@ class SearchActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { SearchScreen() }
+        Log.d(TAG, "onCreate: Activity created")
+        WebSocketManager.initialize()
+        setContent {
+            SearchScreen()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        Log.d(TAG, "onResume: Triggering search with query=${SearchStateHolder.query}, results=${SearchStateHolder.results.size}")
+        WebSocketManager.reconnect()
+        if (SearchStateHolder.query.isNotBlank()) {
+            CoroutineScope(Dispatchers.Main).launch {
+                searchTracks(this@SearchActivity, SearchStateHolder.query) { newResults ->
+                    SearchStateHolder.results = newResults
+                }
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        Log.d(TAG, "onDestroy: Activity destroyed, isFinishing=$isFinishing")
+        // Don't disconnect WebSocket here
     }
 
     @Composable
     fun SearchScreen() {
-        var query by remember { mutableStateOf("") }
-        var results by remember { mutableStateOf<List<Track>>(emptyList()) }
+        var query by remember { mutableStateOf(SearchStateHolder.query) }
+        var results by remember { mutableStateOf(SearchStateHolder.results) }
         val coroutineScope = rememberCoroutineScope()
         val context = LocalContext.current
+
+        LaunchedEffect(query) {
+            SearchStateHolder.query = query
+        }
+        LaunchedEffect(results) {
+            SearchStateHolder.results = results
+        }
 
         Column(
             modifier = Modifier
@@ -48,7 +80,10 @@ class SearchActivity : ComponentActivity() {
         ) {
             OutlinedTextField(
                 value = query,
-                onValueChange = { query = it },
+                onValueChange = { newQuery ->
+                    query = newQuery
+                    Log.d(TAG, "Updating query: $newQuery")
+                },
                 label = { Text("Search Tracks, Yo!") },
                 modifier = Modifier.fillMaxWidth()
             )
@@ -56,7 +91,7 @@ class SearchActivity : ComponentActivity() {
             Button(
                 onClick = {
                     coroutineScope.launch {
-                        searchTracks(query) { newResults ->
+                        searchTracks(context, query) { newResults ->
                             results = newResults
                         }
                     }
@@ -109,20 +144,22 @@ class SearchActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun searchTracks(query: String, onResultsReceived: (List<Track>) -> Unit) = withContext(Dispatchers.IO) {
+    private suspend fun searchTracks(context: Context, query: String, onResultsReceived: (List<Track>) -> Unit) = withContext(Dispatchers.IO) {
+        Log.d(TAG, "Searching for query=$query")
         if (query.isBlank()) {
             withContext(Dispatchers.Main) {
-                Toast.makeText(this@SearchActivity, "Type somethin’, fam!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Type somethin’, fam!", Toast.LENGTH_SHORT).show()
             }
+            onResultsReceived(emptyList())
             return@withContext
         }
 
         if (!WebSocketManager.isConnected()) {
             Log.e(TAG, "WebSocket not connected for search")
             withContext(Dispatchers.Main) {
-                Toast.makeText(this@SearchActivity, "WebSocket ain’t connected!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "WebSocket ain’t connected!", Toast.LENGTH_SHORT).show()
             }
-            searchTracksFallback(query, onResultsReceived)
+            searchTracksFallback(context, query, onResultsReceived)
             return@withContext
         }
 
@@ -154,16 +191,19 @@ class SearchActivity : ComponentActivity() {
                         }
                     }
                 }
-                Log.d(TAG, "Search response: $jsonObject")
+                Log.d(TAG, "Search response: Found ${results.size} tracks for query=$query")
                 onResultsReceived(results)
             } catch (e: Exception) {
                 Log.e(TAG, "Search parse error: $e")
-                Toast.makeText(this@SearchActivity, "Search broke! $e", Toast.LENGTH_SHORT).show()
+                CoroutineScope(Dispatchers.Main).launch {
+                    Toast.makeText(context, "Search broke! $e", Toast.LENGTH_SHORT).show()
+                }
+                onResultsReceived(emptyList())
             }
         }
     }
 
-    private suspend fun searchTracksFallback(query: String, onResultsReceived: (List<Track>) -> Unit) = withContext(Dispatchers.IO) {
+    private suspend fun searchTracksFallback(context: Context, query: String, onResultsReceived: (List<Track>) -> Unit) = withContext(Dispatchers.IO) {
         val url = "$volumioUrl/api/v1/search?query=${URLEncoder.encode(query, "UTF-8")}"
         val request = Request.Builder().url(url).build()
         try {
@@ -171,8 +211,9 @@ class SearchActivity : ComponentActivity() {
             if (!response.isSuccessful) {
                 Log.e(TAG, "REST search failed: ${response.code}")
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(this@SearchActivity, "REST search fucked up!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "REST search fucked up!", Toast.LENGTH_SHORT).show()
                 }
+                onResultsReceived(emptyList())
                 return@withContext
             }
 
@@ -201,14 +242,16 @@ class SearchActivity : ComponentActivity() {
                     }
                 }
             }
+            Log.d(TAG, "REST search: Found ${results.size} tracks for query=$query")
             withContext(Dispatchers.Main) {
                 onResultsReceived(results)
             }
         } catch (e: Exception) {
             Log.e(TAG, "REST search error: $e")
             withContext(Dispatchers.Main) {
-                Toast.makeText(this@SearchActivity, "REST search broke! $e", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "REST search broke! $e", Toast.LENGTH_SHORT).show()
             }
+            onResultsReceived(emptyList())
         }
     }
 
@@ -231,7 +274,9 @@ class SearchActivity : ComponentActivity() {
         }
         WebSocketManager.emit("addToQueue", payload) { args ->
             Log.d(TAG, "Add to queue response: ${args.joinToString()}")
-            Toast.makeText(this@SearchActivity, "Added ${track.title}, yo!", Toast.LENGTH_SHORT).show()
+            CoroutineScope(Dispatchers.Main).launch {
+                Toast.makeText(this@SearchActivity, "Added ${track.title}, yo!", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -279,4 +324,9 @@ class SearchActivity : ComponentActivity() {
         val uri: String,
         val service: String
     )
+}
+
+object SearchStateHolder {
+    var query: String = ""
+    var results: List<SearchActivity.Track> = emptyList()
 }

@@ -31,6 +31,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 
+
 @OptIn(ExperimentalMaterial3Api::class)
 class PlaylistActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -488,11 +489,29 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
     val eraOptions = GrokConfig.ERA_OPTIONS
     val languageOptions = GrokConfig.LANGUAGE_OPTIONS
     val instrumentOptions = GrokConfig.INSTRUMENT_OPTIONS
+    val coroutineScope = rememberCoroutineScope() // Add this
 
     var vibeExpanded by remember { mutableStateOf(false) }
     var eraExpanded by remember { mutableStateOf(false) }
     var languageExpanded by remember { mutableStateOf(false) }
     var instrumentExpanded by remember { mutableStateOf(false) }
+
+
+    // WebSocket connection monitoring
+    LaunchedEffect(Unit) {
+        WebSocketManager.onConnectionChange { isConnected ->
+            coroutineScope.launch { // Wrap in coroutine
+                withContext(Dispatchers.Main) { // Switch to main thread for Toast
+                    if (!isConnected) {
+                        Toast.makeText(context, "WebSocket ain’t connected, fam!", Toast.LENGTH_SHORT).show()
+                        WebSocketManager.reconnect() // Try to reconnect
+                    } else {
+                        Toast.makeText(context, "WebSocket connected, yo!", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+    }
 
     Scaffold(
         topBar = {

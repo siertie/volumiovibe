@@ -21,6 +21,7 @@ kotlinx-coroutines-android = "1.7.3"
 socketio-client = "2.1.0"
 androidx-junit = "1.1.5"
 androidx-espresso-core = "3.5.1"
+activity-ktx = "1.9.3"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -39,6 +40,7 @@ androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
+androidx-activity-ktx = { module = "androidx.activity:activity-ktx", version.ref = "activity-ktx" }
 socketio-client = { group = "io.socket", name = "socket.io-client", version.ref = "socketio" }
 
 androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "androidx-lifecycle-viewmodel-compose" } # Added

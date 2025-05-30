@@ -69,6 +69,7 @@ dependencies {
     implementation(libs.org.json)
     implementation(libs.socketio.client)
     implementation(libs.okhttp)
+    implementation(libs.androidx.activity.ktx)
     implementation(libs.kotlinx.coroutines.android)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
@@ -78,3 +79,4 @@ dependencies {
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
 }
+

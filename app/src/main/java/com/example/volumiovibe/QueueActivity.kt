@@ -1,5 +1,6 @@
 package com.example.volumiovibe
 
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
@@ -27,20 +28,57 @@ class QueueActivity : ComponentActivity() {
     private val volumioUrl = "http://volumio.local:3000"
     private val client = OkHttpClient()
     private val TAG = "VolumioQueueActivity"
+    private var refreshQueueCallback: (() -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { QueueScreen() }
+        Log.d(TAG, "onCreate: Activity created")
+        WebSocketManager.initialize()
+        setContent {
+            QueueScreen { refreshQueueCallback = it }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        Log.d(TAG, "onResume: Checking WebSocket")
+        WebSocketManager.reconnect()
+        refreshQueueCallback?.invoke()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        Log.d(TAG, "onDestroy: Activity destroyed, isFinishing=$isFinishing")
+        // Don't disconnect WebSocket here
     }
 
     @Composable
-    fun QueueScreen() {
+    fun QueueScreen(onRefreshCallback: (() -> Unit) -> Unit) {
         var queue by remember { mutableStateOf<List<Track>>(emptyList()) }
         val coroutineScope = rememberCoroutineScope()
         val context = LocalContext.current
 
         LaunchedEffect(Unit) {
-            fetchQueue { newQueue ->
+            onRefreshCallback {
+                coroutineScope.launch {
+                    fetchQueue(coroutineScope) { newQueue ->
+                        queue = newQueue
+                    }
+                }
+            }
+            WebSocketManager.onConnectionChange { isConnected ->
+                coroutineScope.launch {
+                    withContext(Dispatchers.Main) {
+                        if (!isConnected) {
+                            Toast.makeText(context, "WebSocket ain’t connected, fam!", Toast.LENGTH_SHORT).show()
+                            WebSocketManager.reconnect()
+                        } else {
+                            Toast.makeText(context, "WebSocket connected, yo!", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }
+            fetchQueue(coroutineScope) { newQueue ->
                 queue = newQueue
             }
         }
@@ -58,8 +96,8 @@ class QueueActivity : ComponentActivity() {
             Button(
                 onClick = {
                     coroutineScope.launch {
-                        clearQueue()
-                        fetchQueue { newQueue ->
+                        clearQueue(coroutineScope)
+                        fetchQueue(coroutineScope) { newQueue ->
                             queue = newQueue
                         }
                     }
@@ -67,6 +105,27 @@ class QueueActivity : ComponentActivity() {
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Clear Queue")
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(
+                onClick = {
+                    Log.d(TAG, "Navigating to SearchActivity with CLEAR_TOP | SINGLE_TOP")
+                    context.startActivity(Intent(context, SearchActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    })
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Go to Search")
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Button(
+                onClick = {
+                    context.startActivity(Intent(context, PlaylistActivity::class.java))
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Go to Playlist")
             }
             Spacer(modifier = Modifier.height(16.dp))
             LazyColumn {
@@ -76,13 +135,13 @@ class QueueActivity : ComponentActivity() {
                         index = index,
                         onPlay = {
                             coroutineScope.launch {
-                                playTrack(index)
+                                playTrack(index, coroutineScope)
                             }
                         },
                         onRemove = {
                             coroutineScope.launch {
-                                removeFromQueue(index)
-                                fetchQueue { newQueue ->
+                                removeFromQueue(index, coroutineScope)
+                                fetchQueue(coroutineScope) { newQueue ->
                                     queue = newQueue
                                 }
                             }
@@ -90,8 +149,8 @@ class QueueActivity : ComponentActivity() {
                         onMoveUp = if (index > 0) {
                             {
                                 coroutineScope.launch {
-                                    moveTrack(index, index - 1)
-                                    fetchQueue { newQueue ->
+                                    moveTrack(index, index - 1, coroutineScope)
+                                    fetchQueue(coroutineScope) { newQueue ->
                                         queue = newQueue
                                     }
                                 }
@@ -100,8 +159,8 @@ class QueueActivity : ComponentActivity() {
                         onMoveDown = if (index < queue.size - 1) {
                             {
                                 coroutineScope.launch {
-                                    moveTrack(index, index + 1)
-                                    fetchQueue { newQueue ->
+                                    moveTrack(index, index + 1, coroutineScope)
+                                    fetchQueue(coroutineScope) { newQueue ->
                                         queue = newQueue
                                     }
                                 }
@@ -164,7 +223,7 @@ class QueueActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun fetchQueue(onQueueReceived: (List<Track>) -> Unit) = withContext(Dispatchers.IO) {
+    private suspend fun fetchQueue(scope: CoroutineScope, onQueueReceived: (List<Track>) -> Unit) = withContext(Dispatchers.IO) {
         if (!WebSocketManager.isConnected()) {
             Log.e(TAG, "WebSocket not connected for fetchQueue")
             withContext(Main) {
@@ -195,7 +254,11 @@ class QueueActivity : ComponentActivity() {
                 onQueueReceived(results)
             } catch (e: Exception) {
                 Log.e(TAG, "Queue parse error: $e")
-                Toast.makeText(this@QueueActivity, "Queue fetch broke! $e", Toast.LENGTH_SHORT).show()
+                scope.launch {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@QueueActivity, "Queue fetch broke! $e", Toast.LENGTH_SHORT).show()
+                    }
+                }
             }
         }
     }
@@ -243,7 +306,7 @@ class QueueActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun clearQueue() = withContext(Dispatchers.IO) {
+    private suspend fun clearQueue(scope: CoroutineScope) = withContext(Dispatchers.IO) {
         if (!WebSocketManager.isConnected()) {
             Log.e(TAG, "WebSocket not connected for clearQueue")
             withContext(Main) {
@@ -255,7 +318,11 @@ class QueueActivity : ComponentActivity() {
 
         WebSocketManager.emit("clearQueue", null) { args ->
             Log.d(TAG, "Clear queue response: ${args.joinToString()}")
-            Toast.makeText(this@QueueActivity, "Queue cleared, yo!", Toast.LENGTH_SHORT).show()
+            scope.launch {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@QueueActivity, "Queue cleared, yo!", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 
@@ -280,7 +347,7 @@ class QueueActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun playTrack(index: Int) = withContext(Dispatchers.IO) {
+    private suspend fun playTrack(index: Int, scope: CoroutineScope) = withContext(Dispatchers.IO) {
         if (!WebSocketManager.isConnected()) {
             Log.e(TAG, "WebSocket not connected for playTrack")
             withContext(Main) {
@@ -295,7 +362,11 @@ class QueueActivity : ComponentActivity() {
         }
         WebSocketManager.emit("play", payload) { args ->
             Log.d(TAG, "Play response: ${args.joinToString()}")
-            Toast.makeText(this@QueueActivity, "Playin’ track $index, yo!", Toast.LENGTH_SHORT).show()
+            scope.launch {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@QueueActivity, "Playin’ track $index, yo!", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 
@@ -345,7 +416,7 @@ class QueueActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun removeFromQueue(index: Int) = withContext(Dispatchers.IO) {
+    private suspend fun removeFromQueue(index: Int, scope: CoroutineScope) = withContext(Dispatchers.IO) {
         if (!WebSocketManager.isConnected()) {
             Log.e(TAG, "WebSocket not connected for removeFromQueue")
             withContext(Main) {
@@ -360,7 +431,11 @@ class QueueActivity : ComponentActivity() {
         }
         WebSocketManager.emit("removeFromQueue", payload) { args ->
             Log.d(TAG, "Remove response: ${args.joinToString()}")
-            Toast.makeText(this@QueueActivity, "Removed track, yo!", Toast.LENGTH_SHORT).show()
+            scope.launch {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@QueueActivity, "Removed track, yo!", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 
@@ -371,7 +446,7 @@ class QueueActivity : ComponentActivity() {
         updateQueueFallback(queue)
     }
 
-    private suspend fun moveTrack(fromIndex: Int, toIndex: Int) = withContext(Dispatchers.IO) {
+    private suspend fun moveTrack(fromIndex: Int, toIndex: Int, scope: CoroutineScope) = withContext(Dispatchers.IO) {
         if (!WebSocketManager.isConnected()) {
             Log.e(TAG, "WebSocket not connected for moveTrack")
             withContext(Main) {
@@ -387,7 +462,11 @@ class QueueActivity : ComponentActivity() {
         }
         WebSocketManager.emit("moveQueue", payload) { args ->
             Log.d(TAG, "Received pushQueue: ${args.joinToString()}")
-            Toast.makeText(this@QueueActivity, "Moved track, yo!", Toast.LENGTH_SHORT).show()
+            scope.launch {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@QueueActivity, "Moved track, yo!", Toast.LENGTH_SHORT).show()
+                }
+            }
         }
     }
 

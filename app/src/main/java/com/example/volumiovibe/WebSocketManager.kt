@@ -19,7 +19,10 @@ object WebSocketManager {
     private val TAG = "WebSocketManager"
 
     fun initialize() {
-        if (isInitialized) return
+        if (isInitialized && isConnected()) {
+            Log.d(TAG, "WebSocket already initialized and connected")
+            return
+        }
         try {
             val opts = IO.Options().apply {
                 forceNew = true
@@ -48,6 +51,7 @@ object WebSocketManager {
             }
             socket?.connect()
             isInitialized = true
+            Log.d(TAG, "WebSocket initialized")
         } catch (e: URISyntaxException) {
             Log.e(TAG, "Invalid WebSocket URL: $e")
         }
@@ -117,8 +121,8 @@ object WebSocketManager {
             CoroutineScope(Dispatchers.IO).launch {
                 Log.d(TAG, "Attempting WebSocket reconnect")
                 socket?.connect()
-                repeat(5) { attempt ->
-                    delay(2000)
+                repeat(10) { attempt -> // Bump to 10 attempts
+                    delay(1000) // Faster retry
                     if (isConnected()) {
                         Log.d(TAG, "WebSocket reconnected successfully")
                         return@launch
@@ -126,7 +130,7 @@ object WebSocketManager {
                     Log.w(TAG, "Reconnect attempt ${attempt + 1} failed")
                     socket?.connect()
                 }
-                Log.e(TAG, "Failed to reconnect after 5 attempts")
+                Log.e(TAG, "Failed to reconnect after 10 attempts")
             }
         }
     }

@@ -29,7 +29,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        WebSocketManager.initialize()
+        WebSocketManager.initialize() // Ensure WebSocket is ready
         setContent { VolumioControlScreen() }
     }
 
