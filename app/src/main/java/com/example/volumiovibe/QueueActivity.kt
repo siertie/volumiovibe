@@ -33,6 +33,38 @@ import coil.request.ImageRequest
 import androidx.compose.ui.layout.ContentScale
 import coil.request.CachePolicy
 import androidx.compose.ui.res.painterResource
+import androidx.constraintlayout.compose.ConstraintLayout
+import androidx.constraintlayout.compose.Dimension
+import androidx.compose.animation.core.*
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import coil.compose.AsyncImagePainter
+
+@Composable
+fun Modifier.shimmerPlaceholder(isLoading: Boolean): Modifier = this.then(
+    if (isLoading) {
+        val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
+        val alpha by infiniteTransition.animateFloat(
+            initialValue = 0.3f,
+            targetValue = 0.7f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(800, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "shimmer_alpha"
+        )
+        Modifier.drawBehind {
+            drawRect(
+                color = Color(0xFFB0B0B0).copy(alpha = alpha),
+                topLeft = Offset.Zero,
+                size = Size(size.width, size.height)
+            )
+        }
+    } else {
+        Modifier
+    }
+)
 
 class QueueActivity : ComponentActivity() {
     private val volumioUrl = "http://volumio.local:3000"
@@ -253,7 +285,10 @@ class QueueActivity : ComponentActivity() {
                 }
                 Spacer(modifier = Modifier.height(16.dp))
                 LazyColumn {
-                    itemsIndexed(queue) { index, track ->
+                    itemsIndexed(
+                        items = queue,
+                        key = { index, track -> "${track.uri}_$index" }
+                    ) { index, track ->
                         QueueItem(
                             track = track,
                             index = index,
@@ -316,53 +351,78 @@ class QueueActivity : ComponentActivity() {
                 .clip(RoundedCornerShape(16.dp)),
             elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
         ) {
-            Row(
+            ConstraintLayout(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(12.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    val albumArtUrl = when {
-                        track.albumArt.isNullOrEmpty() -> "https://via.placeholder.com/64"
-                        track.albumArt.startsWith("http") -> track.albumArt
-                        else -> "http://volumio.local:3000${track.albumArt}"
-                    }
-                    AsyncImage(
-                        model = ImageRequest.Builder(LocalContext.current)
-                            .data(albumArtUrl)
-                            .memoryCachePolicy(CachePolicy.ENABLED)
-                            .diskCachePolicy(CachePolicy.ENABLED)
-                            .size(64, 64)
-                            .build(),
-                        contentDescription = "Album Art",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(64.dp)
-                            .clip(RoundedCornerShape(8.dp)),
-                        placeholder = painterResource(id = android.R.drawable.ic_menu_gallery),
-                        error = painterResource(id = android.R.drawable.ic_menu_gallery),
-                        onError = { Log.e(TAG, "Failed to load album art: $albumArtUrl") }
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Column {
-                        Text(
-                            text = "${index + 1}. ${track.title}",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = Color.White
-                        )
-                        Text(
-                            text = track.artist,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = Color(0xFFB0B0B0)
-                        )
-                    }
+                val (albumArt, titleText, artistText, buttons) = createRefs()
+
+                val albumArtUrl = when {
+                    track.albumArt.isNullOrEmpty() -> "https://via.placeholder.com/64"
+                    track.albumArt.startsWith("http") -> track.albumArt
+                    else -> "http://volumio.local:3000${track.albumArt}"
                 }
-                Row {
+                var isLoading by remember { mutableStateOf(true) }
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(albumArtUrl)
+                        .size(64, 64)
+                        .crossfade(true)
+                        .memoryCachePolicy(CachePolicy.ENABLED)
+                        .diskCachePolicy(CachePolicy.ENABLED)
+                        .build(),
+                    contentDescription = "Album Art",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(64.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .shimmerPlaceholder(isLoading)
+                        .constrainAs(albumArt) {
+                            start.linkTo(parent.start)
+                            top.linkTo(parent.top)
+                            bottom.linkTo(parent.bottom)
+                        },
+                    onLoading = { isLoading = true },
+                    onSuccess = { isLoading = false },
+                    onError = {
+                        isLoading = false
+                        Log.e(TAG, "Failed to load album art: $albumArtUrl")
+                    },
+                    error = painterResource(id = R.drawable.ic_error)
+                )
+
+                Text(
+                    text = "${index + 1}. ${track.title}",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Color.White,
+                    modifier = Modifier.constrainAs(titleText) {
+                        start.linkTo(albumArt.end, margin = 12.dp)
+                        top.linkTo(parent.top)
+                        end.linkTo(buttons.start, margin = 8.dp)
+                        width = Dimension.fillToConstraints
+                    }
+                )
+
+                Text(
+                    text = track.artist,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(0xFFB0B0B0),
+                    modifier = Modifier.constrainAs(artistText) {
+                        start.linkTo(albumArt.end, margin = 12.dp)
+                        top.linkTo(titleText.bottom)
+                        end.linkTo(buttons.start, margin = 8.dp)
+                        width = Dimension.fillToConstraints
+                    }
+                )
+
+                Row(
+                    modifier = Modifier.constrainAs(buttons) {
+                        end.linkTo(parent.end)
+                        top.linkTo(parent.top)
+                        bottom.linkTo(parent.bottom)
+                    }
+                ) {
                     if (onMoveUp != null) {
                         IconButton(onClick = onMoveUp) {
                             Text("↑", color = Color(0xFF03DAC6))
@@ -717,6 +777,7 @@ class QueueActivity : ComponentActivity() {
             }
 
             val json = response.body?.string() ?: return@withContext results
+            Log.d(TAG, "REST queue response: $json")
             val jsonObject = JSONObject(json)
             val queueArray = jsonObject.optJSONArray("queue") ?: return@withContext results
 
