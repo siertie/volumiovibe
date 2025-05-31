@@ -31,7 +31,6 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 
-
 @OptIn(ExperimentalMaterial3Api::class)
 class PlaylistActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -47,6 +46,18 @@ class PlaylistActivity : ComponentActivity() {
 data class Track(val title: String, val artist: String, val uri: String, val type: String)
 data class Playlist(val name: String, val tracks: List<Track>)
 
+object PlaylistStateHolder {
+    var selectedVibe: String = GrokConfig.VIBE_OPTIONS.first()
+    var vibeInput: String = ""
+    var era: String = GrokConfig.ERA_OPTIONS.first()
+    var language: String = GrokConfig.LANGUAGE_OPTIONS.first()
+    var instrument: String = GrokConfig.INSTRUMENT_OPTIONS.first()
+    var playlistName: String = ""
+    var artists: String = ""
+    var numSongs: String = GrokConfig.DEFAULT_NUM_SONGS
+    var maxSongsPerArtist: String = GrokConfig.DEFAULT_MAX_SONGS_PER_ARTIST
+}
+
 class PlaylistViewModel : ViewModel() {
     private val TAG = "VolumioPlaylistActivity"
     private val webSocketManager = WebSocketManager
@@ -55,17 +66,80 @@ class PlaylistViewModel : ViewModel() {
 
     var playlists by mutableStateOf<List<Playlist>>(emptyList())
     var selectedPlaylist by mutableStateOf<Playlist?>(null)
-    var vibeInput by mutableStateOf("")
-    var selectedVibe by mutableStateOf(GrokConfig.VIBE_OPTIONS.first())
-    var era by mutableStateOf(GrokConfig.ERA_OPTIONS.first())
-    var language by mutableStateOf(GrokConfig.LANGUAGE_OPTIONS.first())
-    var instrument by mutableStateOf(GrokConfig.INSTRUMENT_OPTIONS.first())
-    var playlistName by mutableStateOf("")
-    var artists by mutableStateOf("")
-    var numSongs by mutableStateOf(GrokConfig.DEFAULT_NUM_SONGS)
-    var maxSongsPerArtist by mutableStateOf(GrokConfig.DEFAULT_MAX_SONGS_PER_ARTIST)
     var isLoading by mutableStateOf(false)
     var aiSuggestions by mutableStateOf<List<Track>>(emptyList())
+
+    private val _selectedVibe = mutableStateOf(PlaylistStateHolder.selectedVibe)
+    var selectedVibe: String
+        get() = _selectedVibe.value
+        set(value) {
+            _selectedVibe.value = value
+            PlaylistStateHolder.selectedVibe = value
+        }
+
+    private val _vibeInput = mutableStateOf(PlaylistStateHolder.vibeInput)
+    var vibeInput: String
+        get() = _vibeInput.value
+        set(value) {
+            _vibeInput.value = value
+            PlaylistStateHolder.vibeInput = value
+        }
+
+    private val _era = mutableStateOf(PlaylistStateHolder.era)
+    var era: String
+        get() = _era.value
+        set(value) {
+            _era.value = value
+            PlaylistStateHolder.era = value
+        }
+
+    private val _language = mutableStateOf(PlaylistStateHolder.language)
+    var language: String
+        get() = _language.value
+        set(value) {
+            _language.value = value
+            PlaylistStateHolder.language = value
+        }
+
+    private val _instrument = mutableStateOf(PlaylistStateHolder.instrument)
+    var instrument: String
+        get() = _instrument.value
+        set(value) {
+            _instrument.value = value
+            PlaylistStateHolder.instrument = value
+        }
+
+    private val _playlistName = mutableStateOf(PlaylistStateHolder.playlistName)
+    var playlistName: String
+        get() = _playlistName.value
+        set(value) {
+            _playlistName.value = value
+            PlaylistStateHolder.playlistName = value
+        }
+
+    private val _artists = mutableStateOf(PlaylistStateHolder.artists)
+    var artists: String
+        get() = _artists.value
+        set(value) {
+            _artists.value = value
+            PlaylistStateHolder.artists = value
+        }
+
+    private val _numSongs = mutableStateOf(PlaylistStateHolder.numSongs)
+    var numSongs: String
+        get() = _numSongs.value
+        set(value) {
+            _numSongs.value = value
+            PlaylistStateHolder.numSongs = value
+        }
+
+    private val _maxSongsPerArtist = mutableStateOf(PlaylistStateHolder.maxSongsPerArtist)
+    var maxSongsPerArtist: String
+        get() = _maxSongsPerArtist.value
+        set(value) {
+            _maxSongsPerArtist.value = value
+            PlaylistStateHolder.maxSongsPerArtist = value
+        }
 
     init {
         connectWebSocket()
@@ -489,22 +563,20 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
     val eraOptions = GrokConfig.ERA_OPTIONS
     val languageOptions = GrokConfig.LANGUAGE_OPTIONS
     val instrumentOptions = GrokConfig.INSTRUMENT_OPTIONS
-    val coroutineScope = rememberCoroutineScope() // Add this
+    val coroutineScope = rememberCoroutineScope()
 
     var vibeExpanded by remember { mutableStateOf(false) }
     var eraExpanded by remember { mutableStateOf(false) }
     var languageExpanded by remember { mutableStateOf(false) }
     var instrumentExpanded by remember { mutableStateOf(false) }
 
-
-    // WebSocket connection monitoring
     LaunchedEffect(Unit) {
         WebSocketManager.onConnectionChange { isConnected ->
-            coroutineScope.launch { // Wrap in coroutine
-                withContext(Dispatchers.Main) { // Switch to main thread for Toast
+            coroutineScope.launch {
+                withContext(Dispatchers.Main) {
                     if (!isConnected) {
                         Toast.makeText(context, "WebSocket ain’t connected, fam!", Toast.LENGTH_SHORT).show()
-                        WebSocketManager.reconnect() // Try to reconnect
+                        WebSocketManager.reconnect()
                     } else {
                         Toast.makeText(context, "WebSocket connected, yo!", Toast.LENGTH_SHORT).show()
                     }
@@ -536,9 +608,7 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
                         value = viewModel.selectedVibe,
                         onValueChange = { viewModel.selectedVibe = it },
                         label = { Text("Pick a Vibe or Type Your Own") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(),
+                        modifier = Modifier.fillMaxWidth().menuAnchor(),
                         readOnly = true
                     )
                     ExposedDropdownMenu(
@@ -575,9 +645,7 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
                         value = viewModel.era,
                         onValueChange = { viewModel.era = it },
                         label = { Text("Pick an Era") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(),
+                        modifier = Modifier.fillMaxWidth().menuAnchor(),
                         readOnly = true
                     )
                     ExposedDropdownMenu(
@@ -604,9 +672,7 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
                         value = viewModel.language,
                         onValueChange = { viewModel.language = it },
                         label = { Text("Music Language") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(),
+                        modifier = Modifier.fillMaxWidth().menuAnchor(),
                         readOnly = true
                     )
                     ExposedDropdownMenu(
@@ -633,9 +699,7 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
                         value = viewModel.instrument,
                         onValueChange = { viewModel.instrument = it },
                         label = { Text("Featured Instrument") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor(),
+                        modifier = Modifier.fillMaxWidth().menuAnchor(),
                         readOnly = true
                     )
                     ExposedDropdownMenu(
