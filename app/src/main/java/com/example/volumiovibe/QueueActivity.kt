@@ -341,15 +341,14 @@ class QueueActivity : ComponentActivity() {
         onMoveUp: (() -> Unit)?,
         onMoveDown: (() -> Unit)?
     ) {
-        Log.d(TAG, "Track: ${track.title}, AlbumArt: ${track.albumArt}")
-
-        Card(
+        Surface(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 6.dp)
-                .clickable { onPlay() }
-                .clip(RoundedCornerShape(16.dp)),
-            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                .clickable { onPlay() },
+            shape = RoundedCornerShape(16.dp),
+            color = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onSurface
         ) {
             ConstraintLayout(
                 modifier = Modifier
@@ -357,13 +356,11 @@ class QueueActivity : ComponentActivity() {
                     .padding(12.dp)
             ) {
                 val (albumArt, titleText, artistText, buttons) = createRefs()
-
                 val albumArtUrl = when {
                     track.albumArt.isNullOrEmpty() -> "https://via.placeholder.com/64"
                     track.albumArt.startsWith("http") -> track.albumArt
                     else -> "http://volumio.local:3000${track.albumArt}"
                 }
-                var isLoading by remember { mutableStateOf(true) }
                 AsyncImage(
                     model = ImageRequest.Builder(LocalContext.current)
                         .data(albumArtUrl)
@@ -377,21 +374,14 @@ class QueueActivity : ComponentActivity() {
                     modifier = Modifier
                         .size(64.dp)
                         .clip(RoundedCornerShape(8.dp))
-                        .shimmerPlaceholder(isLoading)
                         .constrainAs(albumArt) {
                             start.linkTo(parent.start)
                             top.linkTo(parent.top)
                             bottom.linkTo(parent.bottom)
                         },
-                    onLoading = { isLoading = true },
-                    onSuccess = { isLoading = false },
-                    onError = {
-                        isLoading = false
-                        Log.e(TAG, "Failed to load album art: $albumArtUrl")
-                    },
+                    placeholder = painterResource(id = R.drawable.placeholder),
                     error = painterResource(id = R.drawable.ic_error)
                 )
-
                 Text(
                     text = "${index + 1}. ${track.title}",
                     style = MaterialTheme.typography.bodyLarge,
@@ -403,7 +393,6 @@ class QueueActivity : ComponentActivity() {
                         width = Dimension.fillToConstraints
                     }
                 )
-
                 Text(
                     text = track.artist,
                     style = MaterialTheme.typography.bodyMedium,
@@ -415,7 +404,6 @@ class QueueActivity : ComponentActivity() {
                         width = Dimension.fillToConstraints
                     }
                 )
-
                 Row(
                     modifier = Modifier.constrainAs(buttons) {
                         end.linkTo(parent.end)
@@ -424,16 +412,16 @@ class QueueActivity : ComponentActivity() {
                     }
                 ) {
                     if (onMoveUp != null) {
-                        IconButton(onClick = onMoveUp) {
+                        TextButton(onClick = onMoveUp) {
                             Text("↑", color = Color(0xFF03DAC6))
                         }
                     }
                     if (onMoveDown != null) {
-                        IconButton(onClick = onMoveDown) {
+                        TextButton(onClick = onMoveDown) {
                             Text("↓", color = Color(0xFF03DAC6))
                         }
                     }
-                    IconButton(onClick = onRemove) {
+                    TextButton(onClick = onRemove) {
                         Text("X", color = Color(0xFFFF5555))
                     }
                 }
