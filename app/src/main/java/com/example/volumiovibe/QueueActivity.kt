@@ -29,6 +29,13 @@ import coil.compose.AsyncImage
 import androidx.compose.material3.CardDefaults
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import coil.request.ImageRequest
+import androidx.compose.ui.layout.ContentScale
+import coil.request.CachePolicy
+import androidx.compose.ui.res.painterResource
+
+
+
 
 class QueueActivity : ComponentActivity() {
     private val volumioUrl = "http://volumio.local:3000"
@@ -231,11 +238,19 @@ class QueueActivity : ComponentActivity() {
                         else -> "http://volumio.local:3000${track.albumArt}"
                     }
                     AsyncImage(
-                        model = albumArtUrl,
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(albumArtUrl)
+                            .memoryCachePolicy(CachePolicy.ENABLED)
+                            .diskCachePolicy(CachePolicy.ENABLED)
+                            .size(64, 64)
+                            .build(),
                         contentDescription = "Album Art",
+                        contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .size(64.dp)
                             .clip(RoundedCornerShape(8.dp)),
+                        placeholder = painterResource(id = android.R.drawable.ic_menu_gallery),
+                        error = painterResource(id = android.R.drawable.ic_menu_gallery),
                         onError = { Log.e("VolumioQueueActivity", "Failed to load album art: $albumArtUrl") }
                     )
                     Spacer(modifier = Modifier.width(12.dp))
