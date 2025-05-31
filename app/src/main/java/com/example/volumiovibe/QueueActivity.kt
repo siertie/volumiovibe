@@ -49,20 +49,22 @@ class QueueActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "onDestroy: Activity destroyed, isFinishing=$isFinishing")
-        // Don't disconnect WebSocket here
     }
 
     @Composable
     fun QueueScreen(onRefreshCallback: (() -> Unit) -> Unit) {
         var queue by remember { mutableStateOf<List<Track>>(emptyList()) }
+        var isConnecting by remember { mutableStateOf(true) } // New: Track connection state
         val coroutineScope = rememberCoroutineScope()
         val context = LocalContext.current
 
         LaunchedEffect(Unit) {
             onRefreshCallback {
                 coroutineScope.launch {
-                    fetchQueue(coroutineScope) { newQueue ->
-                        queue = newQueue
+                    if (WebSocketManager.waitForConnection()) {
+                        fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
+                    } else {
+                        fetchQueueFallback { newQueue -> queue = newQueue }
                     }
                 }
             }
@@ -78,95 +80,111 @@ class QueueActivity : ComponentActivity() {
                     }
                 }
             }
-            fetchQueue(coroutineScope) { newQueue ->
-                queue = newQueue
+            // New: Wait for WebSocket before fetchin’
+            isConnecting = true
+            if (WebSocketManager.waitForConnection()) {
+                fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
+            } else {
+                fetchQueueFallback { newQueue -> queue = newQueue }
             }
+            isConnecting = false
         }
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp)
-        ) {
-            Text(
-                text = "Queue",
-                style = MaterialTheme.typography.headlineMedium
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(
-                onClick = {
-                    coroutineScope.launch {
-                        clearQueue(coroutineScope)
-                        fetchQueue(coroutineScope) { newQueue ->
-                            queue = newQueue
+        if (isConnecting) {
+            // New: Show spinner while connectin’
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator()
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Hold up, connectin’ to WebSocket...")
+                }
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp)
+            ) {
+                Text(
+                    text = "Queue",
+                    style = MaterialTheme.typography.headlineMedium
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = {
+                        coroutineScope.launch {
+                            clearQueue(coroutineScope)
+                            fetchQueue(coroutineScope) { newQueue ->
+                                queue = newQueue
+                            }
                         }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Clear Queue")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        Log.d(TAG, "Navigating to SearchActivity with CLEAR_TOP | SINGLE_TOP")
+                        context.startActivity(Intent(context, SearchActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                        })
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Go to Search")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        context.startActivity(Intent(context, PlaylistActivity::class.java))
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Go to Playlist")
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                LazyColumn {
+                    itemsIndexed(queue) { index, track ->
+                        QueueItem(
+                            track = track,
+                            index = index,
+                            onPlay = {
+                                coroutineScope.launch {
+                                    playTrack(index, coroutineScope)
+                                }
+                            },
+                            onRemove = {
+                                coroutineScope.launch {
+                                    removeFromQueue(index, coroutineScope)
+                                    fetchQueue(coroutineScope) { newQueue ->
+                                        queue = newQueue
+                                    }
+                                }
+                            },
+                            onMoveUp = if (index > 0) {
+                                {
+                                    coroutineScope.launch {
+                                        moveTrack(index, index - 1, coroutineScope)
+                                        fetchQueue(coroutineScope) { newQueue ->
+                                            queue = newQueue
+                                        }
+                                    }
+                                }
+                            } else null,
+                            onMoveDown = if (index < queue.size - 1) {
+                                {
+                                    coroutineScope.launch {
+                                        moveTrack(index, index + 1, coroutineScope)
+                                        fetchQueue(coroutineScope) { newQueue ->
+                                            queue = newQueue
+                                        }
+                                    }
+                                }
+                            } else null
+                        )
                     }
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Clear Queue")
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Button(
-                onClick = {
-                    Log.d(TAG, "Navigating to SearchActivity with CLEAR_TOP | SINGLE_TOP")
-                    context.startActivity(Intent(context, SearchActivity::class.java).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                    })
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Go to Search")
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Button(
-                onClick = {
-                    context.startActivity(Intent(context, PlaylistActivity::class.java))
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Go to Playlist")
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-            LazyColumn {
-                itemsIndexed(queue) { index, track ->
-                    QueueItem(
-                        track = track,
-                        index = index,
-                        onPlay = {
-                            coroutineScope.launch {
-                                playTrack(index, coroutineScope)
-                            }
-                        },
-                        onRemove = {
-                            coroutineScope.launch {
-                                removeFromQueue(index, coroutineScope)
-                                fetchQueue(coroutineScope) { newQueue ->
-                                    queue = newQueue
-                                }
-                            }
-                        },
-                        onMoveUp = if (index > 0) {
-                            {
-                                coroutineScope.launch {
-                                    moveTrack(index, index - 1, coroutineScope)
-                                    fetchQueue(coroutineScope) { newQueue ->
-                                        queue = newQueue
-                                    }
-                                }
-                            }
-                        } else null,
-                        onMoveDown = if (index < queue.size - 1) {
-                            {
-                                coroutineScope.launch {
-                                    moveTrack(index, index + 1, coroutineScope)
-                                    fetchQueue(coroutineScope) { newQueue ->
-                                        queue = newQueue
-                                    }
-                                }
-                            }
-                        } else null
-                    )
                 }
             }
         }

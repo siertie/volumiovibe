@@ -59,6 +59,15 @@ object WebSocketManager {
 
     fun isConnected(): Boolean = isConnected && socket?.connected() == true
 
+    // New: Wait for connection
+    suspend fun waitForConnection(timeoutMs: Long = 3000): Boolean {
+        val start = System.currentTimeMillis()
+        while (!isConnected() && System.currentTimeMillis() - start < timeoutMs) {
+            delay(100)
+        }
+        return isConnected()
+    }
+
     fun emit(event: String, data: Any? = null, onResponse: ((Array<Any>) -> Unit)? = null) {
         if (!isConnected()) {
             Log.e(TAG, "WebSocket not connected for event: $event")
@@ -92,7 +101,6 @@ object WebSocketManager {
     }
 
     fun debugAllEvents() {
-        // Log known Volumio events
         val knownEvents = listOf(
             "pushListPlaylist", "pushBrowseLibrary", "pushCreatePlaylist", "pushAddToPlaylist",
             "pushState", "pushQueue", Socket.EVENT_CONNECT, Socket.EVENT_DISCONNECT, Socket.EVENT_CONNECT_ERROR
@@ -104,7 +112,6 @@ object WebSocketManager {
                 }
             }
         }
-        // No onAny, so we rely on knownEvents and on() logging
         socket ?: Log.w(TAG, "Socket is null, can’t debug events")
     }
 
@@ -116,21 +123,15 @@ object WebSocketManager {
         connectionListeners.forEach { it(isConnected) }
     }
 
+    // Cleaned-up reconnect
     fun reconnect() {
-        if (!isConnected()) {
+        if (!isConnected() && socket != null) {
             CoroutineScope(Dispatchers.IO).launch {
-                Log.d(TAG, "Attempting WebSocket reconnect")
+                Log.d(TAG, "Tryna reconnect WebSocket")
                 socket?.connect()
-                repeat(10) { attempt -> // Bump to 10 attempts
-                    delay(1000) // Faster retry
-                    if (isConnected()) {
-                        Log.d(TAG, "WebSocket reconnected successfully")
-                        return@launch
-                    }
-                    Log.w(TAG, "Reconnect attempt ${attempt + 1} failed")
-                    socket?.connect()
+                if (!waitForConnection(5000)) {
+                    Log.e(TAG, "Reconnect failed, fam")
                 }
-                Log.e(TAG, "Failed to reconnect after 10 attempts")
             }
         }
     }
