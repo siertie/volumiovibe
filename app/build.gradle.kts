@@ -72,6 +72,7 @@ dependencies {
     implementation(libs.androidx.activity.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.core.splashscreen)
+    implementation(libs.coil.compose)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

@@ -24,6 +24,11 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import androidx.compose.foundation.shape.RoundedCornerShape
+import coil.compose.AsyncImage
+import androidx.compose.material3.CardDefaults
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 
 class QueueActivity : ComponentActivity() {
     private val volumioUrl = "http://volumio.local:3000"
@@ -197,42 +202,69 @@ class QueueActivity : ComponentActivity() {
         onMoveUp: (() -> Unit)?,
         onMoveDown: (() -> Unit)?
     ) {
+        // Log albumArt for debugging
+        Log.d("VolumioQueueActivity", "Track: ${track.title}, AlbumArt: ${track.albumArt}")
+
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 4.dp)
+                .padding(vertical = 6.dp)
+                .clickable { onPlay() }
+                .clip(RoundedCornerShape(16.dp)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onPlay() }
-                    .padding(8.dp),
+                    .padding(12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column {
-                    Text(
-                        text = "${index + 1}. ${track.title}",
-                        style = MaterialTheme.typography.bodyLarge
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    // Album art
+                    val albumArtUrl = when {
+                        track.albumArt.isNullOrEmpty() -> "https://via.placeholder.com/64"
+                        track.albumArt.startsWith("http") -> track.albumArt
+                        else -> "http://volumio.local:3000${track.albumArt}"
+                    }
+                    AsyncImage(
+                        model = albumArtUrl,
+                        contentDescription = "Album Art",
+                        modifier = Modifier
+                            .size(64.dp)
+                            .clip(RoundedCornerShape(8.dp)),
+                        onError = { Log.e("VolumioQueueActivity", "Failed to load album art: $albumArtUrl") }
                     )
-                    Text(
-                        text = track.artist,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = "${index + 1}. ${track.title}",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = Color.White
+                        )
+                        Text(
+                            text = track.artist,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Color(0xFFB0B0B0)
+                        )
+                    }
                 }
                 Row {
                     if (onMoveUp != null) {
                         IconButton(onClick = onMoveUp) {
-                            Text("↑")
+                            Text("↑", color = Color(0xFF03DAC6))
                         }
                     }
                     if (onMoveDown != null) {
                         IconButton(onClick = onMoveDown) {
-                            Text("↓")
+                            Text("↓", color = Color(0xFF03DAC6))
                         }
                     }
                     IconButton(onClick = onRemove) {
-                        Text("X")
+                        Text("X", color = Color(0xFFFF5555))
                     }
                 }
             }
@@ -261,7 +293,8 @@ class QueueActivity : ComponentActivity() {
                                 title = item.getString("name"),
                                 artist = item.getString("artist"),
                                 uri = item.getString("uri"),
-                                service = item.getString("service")
+                                service = item.getString("service"),
+                                albumArt = item.optString("albumart", null) // Grab albumart
                             )
                         )
                     }
@@ -306,7 +339,8 @@ class QueueActivity : ComponentActivity() {
                             title = item.getString("name"),
                             artist = item.getString("artist"),
                             uri = item.getString("uri"),
-                            service = item.getString("service")
+                            service = item.getString("service"),
+                            albumArt = item.optString("albumart", null) // Grab albumart
                         )
                     )
                 }
@@ -584,7 +618,8 @@ class QueueActivity : ComponentActivity() {
                             title = item.getString("name"),
                             artist = item.getString("artist"),
                             uri = item.getString("uri"),
-                            service = item.getString("service")
+                            service = item.getString("service"),
+                            albumArt = item.optString("albumart", null) // Grab albumart
                         )
                     )
                 }
@@ -599,6 +634,7 @@ class QueueActivity : ComponentActivity() {
         val title: String,
         val artist: String,
         val uri: String,
-        val service: String
+        val service: String,
+        val albumArt: String? // Add albumArt field
     )
 }
