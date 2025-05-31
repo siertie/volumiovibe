@@ -34,9 +34,6 @@ import androidx.compose.ui.layout.ContentScale
 import coil.request.CachePolicy
 import androidx.compose.ui.res.painterResource
 
-
-
-
 class QueueActivity : ComponentActivity() {
     private val volumioUrl = "http://volumio.local:3000"
     private val client = OkHttpClient()
@@ -78,6 +75,13 @@ class QueueActivity : ComponentActivity() {
     @Composable
     fun QueueScreen(onRefreshCallback: (() -> Unit) -> Unit) {
         var queue by remember { mutableStateOf<List<Track>>(emptyList()) }
+        var statusText by remember { mutableStateOf("Volumio Status: connecting...") }
+        var seekPosition by remember { mutableStateOf(0f) }
+        var trackDuration by remember { mutableStateOf(1f) }
+        var isPlaying by remember { mutableStateOf(false) }
+        var currentTrackUri by remember { mutableStateOf("") }
+        var tickJob by remember { mutableStateOf<Job?>(null) }
+        var ignoreSeekUpdates by remember { mutableStateOf(false) }
         val coroutineScope = rememberCoroutineScope()
         val context = LocalContext.current
 
@@ -103,7 +107,54 @@ class QueueActivity : ComponentActivity() {
                     }
                 }
             }
-            // Fetch queue directly
+            // Fetch initial state
+            Common.fetchStateFallback(context) { status, title, artist ->
+                statusText = "Volumio Status: $status\nNow Playin’: $title by $artist"
+            }
+            // Set up pushState listener
+            WebSocketManager.on("pushState") { args ->
+                try {
+                    val state = args[0] as? JSONObject ?: return@on
+                    val status = state.getString("status")
+                    val title = state.optString("title", "Nothin’ playin’")
+                    val artist = state.optString("artist", "")
+                    val seek = state.optLong("seek", -1).toFloat() / 1000f
+                    val duration = state.optLong("duration", 1).toFloat().coerceAtLeast(1f)
+                    val uri = state.optString("uri", "")
+                    tickJob?.cancel()
+                    val isTrackChange = uri != currentTrackUri && uri.isNotEmpty()
+                    if (isTrackChange) {
+                        currentTrackUri = uri
+                        seekPosition = 0f
+                    }
+                    isPlaying = (status == "play")
+                    if (!ignoreSeekUpdates && (seek >= 0f || isTrackChange)) {
+                        seekPosition = if (seek >= 0f) seek else 0f
+                    }
+                    trackDuration = duration
+                    statusText = "Volumio Status: $status\nNow Playin’: $title by $artist"
+                    if (isPlaying) {
+                        tickJob = coroutineScope.launch {
+                            while (isActive && isPlaying && seekPosition < trackDuration) {
+                                delay(1000)
+                                if (isPlaying && seekPosition < trackDuration) {
+                                    seekPosition += 1f
+                                }
+                            }
+                            if (seekPosition >= trackDuration) {
+                                isPlaying = false
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Push state error: $e")
+                    statusText = "Volumio Status: error - $e"
+                }
+            }
+            if (WebSocketManager.isConnected()) {
+                WebSocketManager.emit("getState")
+            }
+            // Fetch queue
             if (WebSocketManager.isConnected()) {
                 fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
             } else {
@@ -111,90 +162,136 @@ class QueueActivity : ComponentActivity() {
             }
         }
 
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp)
-        ) {
-            Text(
-                text = "Queue",
-                style = MaterialTheme.typography.headlineMedium
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(
-                onClick = {
-                    coroutineScope.launch {
-                        clearQueue(coroutineScope)
-                        fetchQueue(coroutineScope) { newQueue ->
-                            queue = newQueue
+        DisposableEffect(Unit) {
+            onDispose {
+                tickJob?.cancel()
+            }
+        }
+
+        Scaffold(
+            bottomBar = {
+                PlayerControls(
+                    statusText = statusText,
+                    seekPosition = seekPosition,
+                    trackDuration = trackDuration,
+                    isPlaying = isPlaying,
+                    onPlay = {
+                        coroutineScope.launch { Common.sendCommand(context, "play") }
+                    },
+                    onPause = {
+                        coroutineScope.launch { Common.sendCommand(context, "pause") }
+                    },
+                    onNext = {
+                        coroutineScope.launch { Common.sendCommand(context, "next") }
+                    },
+                    onPrevious = {
+                        coroutineScope.launch { Common.sendCommand(context, "prev") }
+                    },
+                    onSeek = { newValue ->
+                        seekPosition = newValue
+                        coroutineScope.launch {
+                            val seekSeconds = newValue.toInt()
+                            ignoreSeekUpdates = true
+                            WebSocketManager.emit("pause")
+                            delay(500)
+                            WebSocketManager.emit("seek", seekSeconds)
+                            delay(500)
+                            WebSocketManager.emit("play")
+                            delay(4000)
+                            ignoreSeekUpdates = false
+                            delay(1000)
+                            WebSocketManager.emit("getState")
                         }
                     }
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Clear Queue")
+                )
             }
-            Spacer(modifier = Modifier.height(8.dp))
-            Button(
-                onClick = {
-                    Log.d(TAG, "Navigating to SearchActivity with CLEAR_TOP | SINGLE_TOP")
-                    context.startActivity(Intent(context, SearchActivity::class.java).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                    })
-                },
-                modifier = Modifier.fillMaxWidth()
+        ) { padding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(16.dp)
             ) {
-                Text("Go to Search")
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Button(
-                onClick = {
-                    context.startActivity(Intent(context, PlaylistActivity::class.java))
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Go to Playlist")
-            }
-            Spacer(modifier = Modifier.height(16.dp))
-            LazyColumn {
-                itemsIndexed(queue) { index, track ->
-                    QueueItem(
-                        track = track,
-                        index = index,
-                        onPlay = {
-                            coroutineScope.launch {
-                                playTrack(index, coroutineScope)
+                Text(
+                    text = "Queue",
+                    style = MaterialTheme.typography.headlineMedium
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = {
+                        coroutineScope.launch {
+                            clearQueue(coroutineScope)
+                            fetchQueue(coroutineScope) { newQueue ->
+                                queue = newQueue
                             }
-                        },
-                        onRemove = {
-                            coroutineScope.launch {
-                                removeFromQueue(index, coroutineScope)
-                                fetchQueue(coroutineScope) { newQueue ->
-                                    queue = newQueue
-                                }
-                            }
-                        },
-                        onMoveUp = if (index > 0) {
-                            {
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Clear Queue")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        Log.d(TAG, "Navigating to SearchActivity with CLEAR_TOP | SINGLE_TOP")
+                        context.startActivity(Intent(context, SearchActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                        })
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Go to Search")
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        context.startActivity(Intent(context, PlaylistActivity::class.java))
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Go to Playlist")
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                LazyColumn {
+                    itemsIndexed(queue) { index, track ->
+                        QueueItem(
+                            track = track,
+                            index = index,
+                            onPlay = {
                                 coroutineScope.launch {
-                                    moveTrack(index, index - 1, coroutineScope)
+                                    playTrack(index, coroutineScope)
+                                }
+                            },
+                            onRemove = {
+                                coroutineScope.launch {
+                                    removeFromQueue(index, coroutineScope)
                                     fetchQueue(coroutineScope) { newQueue ->
                                         queue = newQueue
                                     }
                                 }
-                            }
-                        } else null,
-                        onMoveDown = if (index < queue.size - 1) {
-                            {
-                                coroutineScope.launch {
-                                    moveTrack(index, index + 1, coroutineScope)
-                                    fetchQueue(coroutineScope) { newQueue ->
-                                        queue = newQueue
+                            },
+                            onMoveUp = if (index > 0) {
+                                {
+                                    coroutineScope.launch {
+                                        moveTrack(index, index - 1, coroutineScope)
+                                        fetchQueue(coroutineScope) { newQueue ->
+                                            queue = newQueue
+                                        }
                                     }
                                 }
-                            }
-                        } else null
-                    )
+                            } else null,
+                            onMoveDown = if (index < queue.size - 1) {
+                                {
+                                    coroutineScope.launch {
+                                        moveTrack(index, index + 1, coroutineScope)
+                                        fetchQueue(coroutineScope) { newQueue ->
+                                            queue = newQueue
+                                        }
+                                    }
+                                }
+                            } else null
+                        )
+                    }
                 }
             }
         }
@@ -209,8 +306,7 @@ class QueueActivity : ComponentActivity() {
         onMoveUp: (() -> Unit)?,
         onMoveDown: (() -> Unit)?
     ) {
-        // Log albumArt for debugging
-        Log.d("VolumioQueueActivity", "Track: ${track.title}, AlbumArt: ${track.albumArt}")
+        Log.d(TAG, "Track: ${track.title}, AlbumArt: ${track.albumArt}")
 
         Card(
             modifier = Modifier
@@ -231,7 +327,6 @@ class QueueActivity : ComponentActivity() {
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.weight(1f)
                 ) {
-                    // Album art
                     val albumArtUrl = when {
                         track.albumArt.isNullOrEmpty() -> "https://via.placeholder.com/64"
                         track.albumArt.startsWith("http") -> track.albumArt
@@ -251,7 +346,7 @@ class QueueActivity : ComponentActivity() {
                             .clip(RoundedCornerShape(8.dp)),
                         placeholder = painterResource(id = android.R.drawable.ic_menu_gallery),
                         error = painterResource(id = android.R.drawable.ic_menu_gallery),
-                        onError = { Log.e("VolumioQueueActivity", "Failed to load album art: $albumArtUrl") }
+                        onError = { Log.e(TAG, "Failed to load album art: $albumArtUrl") }
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Column {
@@ -309,7 +404,7 @@ class QueueActivity : ComponentActivity() {
                                 artist = item.getString("artist"),
                                 uri = item.getString("uri"),
                                 service = item.getString("service"),
-                                albumArt = item.optString("albumart", null) // Grab albumart
+                                albumArt = item.optString("albumart", null)
                             )
                         )
                     }
@@ -355,7 +450,7 @@ class QueueActivity : ComponentActivity() {
                             artist = item.getString("artist"),
                             uri = item.getString("uri"),
                             service = item.getString("service"),
-                            albumArt = item.optString("albumart", null) // Grab albumart
+                            albumArt = item.optString("albumart", null)
                         )
                     )
                 }
@@ -634,7 +729,7 @@ class QueueActivity : ComponentActivity() {
                             artist = item.getString("artist"),
                             uri = item.getString("uri"),
                             service = item.getString("service"),
-                            albumArt = item.optString("albumart", null) // Grab albumart
+                            albumArt = item.optString("albumart", null)
                         )
                     )
                 }
@@ -650,6 +745,6 @@ class QueueActivity : ComponentActivity() {
         val artist: String,
         val uri: String,
         val service: String,
-        val albumArt: String? // Add albumArt field
+        val albumArt: String?
     )
 }

@@ -17,6 +17,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.*
@@ -25,6 +27,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
+import kotlinx.coroutines.isActive
 
 class SearchActivity : ComponentActivity() {
     private val volumioUrl = "http://volumio.local:3000"
@@ -56,13 +59,19 @@ class SearchActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "onDestroy: Activity destroyed, isFinishing=$isFinishing")
-        // Don't disconnect WebSocket here
     }
 
     @Composable
     fun SearchScreen() {
         var query by remember { mutableStateOf(SearchStateHolder.query) }
         var results by remember { mutableStateOf(SearchStateHolder.results) }
+        var statusText by remember { mutableStateOf("Volumio Status: connecting...") }
+        var seekPosition by remember { mutableStateOf(0f) }
+        var trackDuration by remember { mutableStateOf(1f) }
+        var isPlaying by remember { mutableStateOf(false) }
+        var currentTrackUri by remember { mutableStateOf("") }
+        var tickJob by remember { mutableStateOf<Job?>(null) }
+        var ignoreSeekUpdates by remember { mutableStateOf(false) }
         val coroutineScope = rememberCoroutineScope()
         val context = LocalContext.current
 
@@ -72,42 +81,146 @@ class SearchActivity : ComponentActivity() {
         LaunchedEffect(results) {
             SearchStateHolder.results = results
         }
-
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(16.dp)
-        ) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = { newQuery ->
-                    query = newQuery
-                    Log.d(TAG, "Updating query: $newQuery")
-                },
-                label = { Text("Search Tracks, Yo!") },
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Button(
-                onClick = {
-                    coroutineScope.launch {
-                        searchTracks(context, query) { newResults ->
-                            results = newResults
+        LaunchedEffect(Unit) {
+            Common.fetchStateFallback(context) { status, title, artist ->
+                statusText = "Volumio Status: $status\nNow Playin’: $title by $artist"
+            }
+            WebSocketManager.onConnectionChange { isConnected ->
+                coroutineScope.launch {
+                    withContext(Dispatchers.Main) {
+                        if (!isConnected) {
+                            Toast.makeText(context, "WebSocket ain’t connected, fam!", Toast.LENGTH_SHORT).show()
+                            WebSocketManager.reconnect()
+                        } else {
+                            Toast.makeText(context, "WebSocket connected, yo!", Toast.LENGTH_SHORT).show()
                         }
                     }
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Search")
+                }
             }
-            Spacer(modifier = Modifier.height(16.dp))
-            LazyColumn {
-                items(results) { track ->
-                    TrackItem(track = track, onAddToQueue = {
-                        coroutineScope.launch {
-                            addToQueue(track)
+            WebSocketManager.on("pushState") { args ->
+                try {
+                    val state = args[0] as? JSONObject ?: return@on
+                    val status = state.getString("status")
+                    val title = state.optString("title", "Nothin’ playin’")
+                    val artist = state.optString("artist", "")
+                    val seek = state.optLong("seek", -1).toFloat() / 1000f
+                    val duration = state.optLong("duration", 1).toFloat().coerceAtLeast(1f)
+                    val uri = state.optString("uri", "")
+                    tickJob?.cancel()
+                    val isTrackChange = uri != currentTrackUri && uri.isNotEmpty()
+                    if (isTrackChange) {
+                        currentTrackUri = uri
+                        seekPosition = 0f
+                    }
+                    isPlaying = (status == "play")
+                    if (!ignoreSeekUpdates && (seek >= 0f || isTrackChange)) {
+                        seekPosition = if (seek >= 0f) seek else 0f
+                    }
+                    trackDuration = duration
+                    statusText = "Volumio Status: $status\nNow Playin’: $title by $artist"
+                    if (isPlaying) {
+                        tickJob = coroutineScope.launch {
+                            while (isActive && isPlaying && seekPosition < trackDuration) {
+                                delay(1000)
+                                if (isPlaying && seekPosition < trackDuration) {
+                                    seekPosition += 1f
+                                }
+                            }
+                            if (seekPosition >= trackDuration) {
+                                isPlaying = false
+                            }
                         }
-                    })
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Push state error: $e")
+                    statusText = "Volumio Status: error - $e"
+                }
+            }
+            if (WebSocketManager.isConnected()) {
+                WebSocketManager.emit("getState")
+            }
+        }
+        DisposableEffect(Unit) {
+            onDispose {
+                tickJob?.cancel()
+            }
+        }
+
+        Scaffold(
+            bottomBar = {
+                PlayerControls(
+                    statusText = statusText,
+                    seekPosition = seekPosition,
+                    trackDuration = trackDuration,
+                    isPlaying = isPlaying,
+                    onPlay = {
+                        coroutineScope.launch { Common.sendCommand(context, "play") }
+                    },
+                    onPause = {
+                        coroutineScope.launch { Common.sendCommand(context, "pause") }
+                    },
+                    onNext = {
+                        coroutineScope.launch { Common.sendCommand(context, "next") }
+                    },
+                    onPrevious = {
+                        coroutineScope.launch { Common.sendCommand(context, "prev") }
+                    },
+                    onSeek = { newValue ->
+                        seekPosition = newValue
+                        coroutineScope.launch {
+                            val seekSeconds = newValue.toInt()
+                            ignoreSeekUpdates = true
+                            WebSocketManager.emit("pause")
+                            delay(500)
+                            WebSocketManager.emit("seek", seekSeconds)
+                            delay(500)
+                            WebSocketManager.emit("play")
+                            delay(4000)
+                            ignoreSeekUpdates = false
+                            delay(1000)
+                            WebSocketManager.emit("getState")
+                        }
+                    }
+                )
+            }
+        ) { padding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(16.dp)
+            ) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { newQuery ->
+                        query = newQuery
+                        Log.d(TAG, "Updating query: $newQuery")
+                    },
+                    label = { Text("Search Tracks, Yo!") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        coroutineScope.launch {
+                            searchTracks(context, query) { newResults ->
+                                results = newResults
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Search")
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                LazyColumn {
+                    items(results) { track ->
+                        TrackItem(track = track, onAddToQueue = {
+                            coroutineScope.launch {
+                                addToQueue(track)
+                            }
+                        })
+                    }
                 }
             }
         }
