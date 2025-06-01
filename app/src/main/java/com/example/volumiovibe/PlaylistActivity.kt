@@ -1,11 +1,16 @@
 package com.example.volumiovibe
 
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -30,13 +35,21 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 
 @OptIn(ExperimentalMaterial3Api::class)
 class PlaylistActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme  {
+            val dynamicColor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val context = LocalContext.current
+                if (isSystemInDarkTheme()) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+            } else {
+                MaterialTheme.colorScheme
+            }
+            MaterialTheme(colorScheme = dynamicColor) {
                 PlaylistScreen(viewModel = viewModel())
             }
         }
@@ -55,6 +68,7 @@ object PlaylistStateHolder {
     var artists: String = ""
     var numSongs: String = GrokConfig.DEFAULT_NUM_SONGS
     var maxSongsPerArtist: String = GrokConfig.DEFAULT_MAX_SONGS_PER_ARTIST
+    val recentVibes: MutableList<String> = mutableListOf()
 }
 
 class PlaylistViewModel : ViewModel() {
@@ -342,6 +356,11 @@ class PlaylistViewModel : ViewModel() {
         Log.d(TAG, "Emitted deletePlaylist: $playlistName")
     }
 
+    fun search(query: String) {
+        webSocketManager.emit("search", JSONObject().put("value", query))
+        Log.d(TAG, "Emitted search: $query")
+    }
+
     suspend fun waitForSearchResults(timeoutMs: Long = 5000): List<Track> {
         val startTime = System.currentTimeMillis()
         while (aiSuggestions.isEmpty() && System.currentTimeMillis() - startTime < timeoutMs) {
@@ -354,9 +373,14 @@ class PlaylistViewModel : ViewModel() {
         viewModelScope.launch {
             isLoading = true
             try {
+                val vibe = if (selectedVibe != GrokConfig.VIBE_OPTIONS.first()) selectedVibe else vibeInput
+                if (vibe.isNotBlank() && !PlaylistStateHolder.recentVibes.contains(vibe)) {
+                    PlaylistStateHolder.recentVibes.add(0, vibe)
+                    if (PlaylistStateHolder.recentVibes.size > 5) PlaylistStateHolder.recentVibes.removeLast()
+                }
                 val finalPlaylistName = if (playlistName.isBlank()) {
                     xAiApi.generatePlaylistName(
-                        vibe = if (selectedVibe != GrokConfig.VIBE_OPTIONS.first()) selectedVibe else vibeInput,
+                        vibe = vibe,
                         artists = artists.takeIf { it.isNotBlank() },
                         era = era.takeIf { it != GrokConfig.ERA_OPTIONS.first() },
                         instrument = instrument.takeIf { it != GrokConfig.INSTRUMENT_OPTIONS.first() },
@@ -382,7 +406,7 @@ class PlaylistViewModel : ViewModel() {
                 val numSongsInt = numSongs.toIntOrNull() ?: GrokConfig.DEFAULT_NUM_SONGS.toInt()
                 val maxSongsPerArtistInt = if (numSongsInt < 10) 1 else maxSongsPerArtist.toIntOrNull() ?: GrokConfig.DEFAULT_MAX_SONGS_PER_ARTIST.toInt()
                 val songList = xAiApi.generateSongList(
-                    vibe = if (selectedVibe != GrokConfig.VIBE_OPTIONS.first()) selectedVibe else vibeInput,
+                    vibe = vibe,
                     numSongs = numSongsInt,
                     artists = artists.takeIf { it.isNotBlank() },
                     era = era.takeIf { it != GrokConfig.ERA_OPTIONS.first() },
@@ -405,7 +429,7 @@ class PlaylistViewModel : ViewModel() {
                 for ((artist, title) in tracks) {
                     if (addedTracks >= numSongsInt) break
                     val query = "$artist $title"
-                    webSocketManager.emit("search", JSONObject().put("value", query))
+                    search(query)
                     Log.d(TAG, "Emitted search: $query")
                     val results = waitForSearchResults()
                     if (results.isNotEmpty()) {
@@ -566,6 +590,8 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
     val instrumentOptions = GrokConfig.INSTRUMENT_OPTIONS
     val coroutineScope = rememberCoroutineScope()
 
+    var searchQuery by remember { mutableStateOf("") }
+    var optionsExpanded by remember { mutableStateOf(false) }
     var vibeExpanded by remember { mutableStateOf(false) }
     var eraExpanded by remember { mutableStateOf(false) }
     var languageExpanded by remember { mutableStateOf(false) }
@@ -598,172 +624,269 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .padding(16.dp),
+                    .padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                ExposedDropdownMenuBox(
-                    expanded = vibeExpanded,
-                    onExpandedChange = { vibeExpanded = !vibeExpanded }
-                ) {
-                    TextField(
-                        value = viewModel.selectedVibe,
-                        onValueChange = { viewModel.selectedVibe = it },
-                        label = { Text("Pick a Vibe or Type Your Own") },
-                        modifier = Modifier.fillMaxWidth().menuAnchor(),
-                        readOnly = true
-                    )
-                    ExposedDropdownMenu(
-                        expanded = vibeExpanded,
-                        onDismissRequest = { vibeExpanded = false }
-                    ) {
-                        vibeOptions.forEach { vibe ->
-                            DropdownMenuItem(
-                                text = { Text(vibe) },
-                                onClick = {
-                                    viewModel.selectedVibe = vibe
-                                    viewModel.vibeInput = if (vibe != GrokConfig.VIBE_OPTIONS.first()) vibe else ""
-                                    vibeExpanded = false
-                                }
-                            )
-                        }
-                    }
-                }
-                OutlinedTextField(
-                    value = viewModel.vibeInput,
-                    onValueChange = {
+                // Search Bar with Options Toggle
+                SearchBar(
+                    query = searchQuery,
+                    onQueryChange = {
+                        searchQuery = it
                         viewModel.vibeInput = it
                         viewModel.selectedVibe = GrokConfig.VIBE_OPTIONS.first()
                     },
-                    label = { Text("Custom Vibe") },
-                    modifier = Modifier.fillMaxWidth()
-                )
+                    onSearch = { viewModel.generateAiPlaylist(context) },
+                    active = false,
+                    onActiveChange = {},
+                    placeholder = { Text("Enter Vibe for Playlist") },
+                    trailingIcon = {
+                        IconButton(onClick = {
+                            optionsExpanded = !optionsExpanded
+                        }) {
+                            Icon(
+                                painter = painterResource(
+                                    id = if (optionsExpanded) android.R.drawable.ic_menu_close_clear_cancel
+                                    else android.R.drawable.ic_menu_add
+                                ),
+                                contentDescription = if (optionsExpanded) "Collapse Options" else "Expand Options"
+                            )
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp)
+                ) {}
 
-                ExposedDropdownMenuBox(
-                    expanded = eraExpanded,
-                    onExpandedChange = { eraExpanded = !eraExpanded }
-                ) {
-                    TextField(
-                        value = viewModel.era,
-                        onValueChange = { viewModel.era = it },
-                        label = { Text("Pick an Era") },
-                        modifier = Modifier.fillMaxWidth().menuAnchor(),
-                        readOnly = true
-                    )
-                    ExposedDropdownMenu(
-                        expanded = eraExpanded,
-                        onDismissRequest = { eraExpanded = false }
+                // Recent Vibes Chips
+                if (PlaylistStateHolder.recentVibes.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        eraOptions.forEach { era ->
-                            DropdownMenuItem(
-                                text = { Text(era) },
+                        PlaylistStateHolder.recentVibes.take(3).forEach { vibe ->
+                            FilterChip(
+                                selected = searchQuery == vibe,
                                 onClick = {
-                                    viewModel.era = era
-                                    eraExpanded = false
-                                }
+                                    searchQuery = vibe
+                                    viewModel.vibeInput = vibe
+                                    viewModel.selectedVibe = GrokConfig.VIBE_OPTIONS.first()
+                                },
+                                label = { Text(vibe) }
                             )
                         }
                     }
                 }
 
-                ExposedDropdownMenuBox(
-                    expanded = languageExpanded,
-                    onExpandedChange = { languageExpanded = !languageExpanded }
+                // Options Dropdown
+                AnimatedVisibility(
+                    visible = optionsExpanded,
+                    enter = slideInVertically(initialOffsetY = { -it }),
+                    exit = slideOutVertically(targetOffsetY = { -it })
                 ) {
-                    TextField(
-                        value = viewModel.language,
-                        onValueChange = { viewModel.language = it },
-                        label = { Text("Music Language") },
-                        modifier = Modifier.fillMaxWidth().menuAnchor(),
-                        readOnly = true
-                    )
-                    ExposedDropdownMenu(
-                        expanded = languageExpanded,
-                        onDismissRequest = { languageExpanded = false }
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 16.dp)
                     ) {
-                        languageOptions.forEach { lang ->
-                            DropdownMenuItem(
-                                text = { Text(lang) },
-                                onClick = {
-                                    viewModel.language = lang
-                                    languageExpanded = false
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            ExposedDropdownMenuBox(
+                                expanded = vibeExpanded,
+                                onExpandedChange = { vibeExpanded = !vibeExpanded }
+                            ) {
+                                TextField(
+                                    value = viewModel.selectedVibe,
+                                    onValueChange = { viewModel.selectedVibe = it },
+                                    label = { Text("Pick a Vibe or Type Your Own") },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .menuAnchor(),
+                                    readOnly = true
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = vibeExpanded,
+                                    onDismissRequest = { vibeExpanded = false }
+                                ) {
+                                    vibeOptions.forEach { vibe ->
+                                        DropdownMenuItem(
+                                            text = { Text(vibe) },
+                                            onClick = {
+                                                viewModel.selectedVibe = vibe
+                                                viewModel.vibeInput = if (vibe != GrokConfig.VIBE_OPTIONS.first()) vibe else ""
+                                                vibeExpanded = false
+                                            }
+                                        )
+                                    }
                                 }
+                            }
+                            OutlinedTextField(
+                                value = viewModel.vibeInput,
+                                onValueChange = {
+                                    viewModel.vibeInput = it
+                                    viewModel.selectedVibe = GrokConfig.VIBE_OPTIONS.first()
+                                },
+                                label = { Text("Custom Vibe") },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            ExposedDropdownMenuBox(
+                                expanded = eraExpanded,
+                                onExpandedChange = { eraExpanded = !eraExpanded }
+                            ) {
+                                TextField(
+                                    value = viewModel.era,
+                                    onValueChange = { viewModel.era = it },
+                                    label = { Text("Pick an Era") },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .menuAnchor(),
+                                    readOnly = true
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = eraExpanded,
+                                    onDismissRequest = { eraExpanded = false }
+                                ) {
+                                    eraOptions.forEach { era ->
+                                        DropdownMenuItem(
+                                            text = { Text(era) },
+                                            onClick = {
+                                                viewModel.era = era
+                                                eraExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                            ExposedDropdownMenuBox(
+                                expanded = languageExpanded,
+                                onExpandedChange = { languageExpanded = !languageExpanded }
+                            ) {
+                                TextField(
+                                    value = viewModel.language,
+                                    onValueChange = { viewModel.language = it },
+                                    label = { Text("Music Language") },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .menuAnchor(),
+                                    readOnly = true
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = languageExpanded,
+                                    onDismissRequest = { languageExpanded = false }
+                                ) {
+                                    languageOptions.forEach { lang ->
+                                        DropdownMenuItem(
+                                            text = { Text(lang) },
+                                            onClick = {
+                                                viewModel.language = lang
+                                                languageExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                            ExposedDropdownMenuBox(
+                                expanded = instrumentExpanded,
+                                onExpandedChange = { instrumentExpanded = !instrumentExpanded }
+                            ) {
+                                TextField(
+                                    value = viewModel.instrument,
+                                    onValueChange = { viewModel.instrument = it },
+                                    label = { Text("Featured Instrument") },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .menuAnchor(),
+                                    readOnly = true
+                                )
+                                ExposedDropdownMenu(
+                                    expanded = instrumentExpanded,
+                                    onDismissRequest = { instrumentExpanded = false }
+                                ) {
+                                    instrumentOptions.forEach { inst ->
+                                        DropdownMenuItem(
+                                            text = { Text(inst) },
+                                            onClick = {
+                                                viewModel.instrument = inst
+                                                instrumentExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                            OutlinedTextField(
+                                value = viewModel.playlistName,
+                                onValueChange = { viewModel.playlistName = it },
+                                label = { Text("Playlist Name (blank for Grok’s pick)") },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            OutlinedTextField(
+                                value = viewModel.artists,
+                                onValueChange = { viewModel.artists = it },
+                                label = { Text("Example Artists (e.g., Green Day)") },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            OutlinedTextField(
+                                value = viewModel.numSongs,
+                                onValueChange = { viewModel.numSongs = it },
+                                label = { Text("How Many Tracks?") },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            OutlinedTextField(
+                                value = viewModel.maxSongsPerArtist,
+                                onValueChange = { viewModel.maxSongsPerArtist = it },
+                                label = { Text("Max Songs per Artist") },
+                                modifier = Modifier.fillMaxWidth()
                             )
                         }
                     }
                 }
 
-                ExposedDropdownMenuBox(
-                    expanded = instrumentExpanded,
-                    onExpandedChange = { instrumentExpanded = !instrumentExpanded }
-                ) {
-                    TextField(
-                        value = viewModel.instrument,
-                        onValueChange = { viewModel.instrument = it },
-                        label = { Text("Featured Instrument") },
-                        modifier = Modifier.fillMaxWidth().menuAnchor(),
-                        readOnly = true
-                    )
-                    ExposedDropdownMenu(
-                        expanded = instrumentExpanded,
-                        onDismissRequest = { instrumentExpanded = false }
+                // Generate Playlist Button
+                if (optionsExpanded) {
+                    FilledTonalButton(
+                        onClick = { viewModel.generateAiPlaylist(context) },
+                        enabled = !viewModel.isLoading,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 16.dp)
                     ) {
-                        instrumentOptions.forEach { inst ->
-                            DropdownMenuItem(
-                                text = { Text(inst) },
-                                onClick = {
-                                    viewModel.instrument = inst
-                                    instrumentExpanded = false
-                                }
-                            )
-                        }
+                        Text("Make That Playlist, Fam!")
                     }
-                }
-
-                OutlinedTextField(
-                    value = viewModel.playlistName,
-                    onValueChange = { viewModel.playlistName = it },
-                    label = { Text("Playlist Name (blank for Grok’s pick)") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                OutlinedTextField(
-                    value = viewModel.artists,
-                    onValueChange = { viewModel.artists = it },
-                    label = { Text("Example Artists (e.g., Green Day)") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                OutlinedTextField(
-                    value = viewModel.numSongs,
-                    onValueChange = { viewModel.numSongs = it },
-                    label = { Text("How Many Tracks?") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                OutlinedTextField(
-                    value = viewModel.maxSongsPerArtist,
-                    onValueChange = { viewModel.maxSongsPerArtist = it },
-                    label = { Text("Max Songs per Artist") },
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Button(
-                    onClick = { viewModel.generateAiPlaylist(context) },
-                    enabled = !viewModel.isLoading,
-                    modifier = Modifier.padding(top = 16.dp)
-                ) {
-                    Text("Make That Playlist, Fam!")
                 }
 
                 if (viewModel.isLoading) {
-                    CircularProgressIndicator(modifier = Modifier.padding(top = 16.dp))
+                    CircularProgressIndicator(modifier = Modifier.padding(bottom = 16.dp))
                 }
 
+                if (!optionsExpanded) {
+                    FilledTonalButton(
+                        onClick = { viewModel.generateAiPlaylist(context) },
+                        enabled = !viewModel.isLoading,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 16.dp)
+                    ) {
+                        Text("Make That Playlist, Fam!")
+                    }
+                }
+
+                // Playlist List
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
-                        .padding(top = 16.dp)
                 ) {
                     items(viewModel.playlists) { playlist: Playlist ->
                         PlaylistCard(
