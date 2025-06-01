@@ -11,12 +11,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import com.example.volumiovibe.ui.theme.VolumioVibeTheme
+import com.example.volumiovibe.ui.theme.AppTheme
+import com.example.volumiovibe.ui.theme.ThemeMode
 import kotlinx.coroutines.*
 import kotlinx.coroutines.Dispatchers.Main
 import okhttp3.*
@@ -45,10 +47,13 @@ class QueueActivity : ComponentActivity() {
             keepSplash = false
         }
         setContent {
-            VolumioVibeTheme {
-                QueueScreen {
-                    refreshQueueCallback = it
-                }
+            var themeMode by remember { mutableStateOf(ThemeMode.SYSTEM) }
+            AppTheme(themeMode = themeMode) {
+                QueueScreen(
+                    onRefreshCallback = { refreshQueueCallback = it },
+                    themeMode = themeMode,
+                    onThemeModeChange = { newMode -> themeMode = newMode }
+                )
             }
         }
     }
@@ -66,7 +71,11 @@ class QueueActivity : ComponentActivity() {
     }
 
     @Composable
-    fun QueueScreen(onRefreshCallback: (() -> Unit) -> Unit) {
+    fun QueueScreen(
+        onRefreshCallback: (() -> Unit) -> Unit,
+        themeMode: ThemeMode,
+        onThemeModeChange: (ThemeMode) -> Unit
+    ) {
         var queue by remember { mutableStateOf<List<Track>>(emptyList()) }
         var statusText by remember { mutableStateOf("Volumio Status: connecting...") }
         var seekPosition by remember { mutableStateOf(0f) }
@@ -100,11 +109,9 @@ class QueueActivity : ComponentActivity() {
                     }
                 }
             }
-            // Fetch initial state
             Common.fetchStateFallback(context) { status, title, artist ->
                 statusText = "Volumio Status: $status\nNow Playin’: $title by $artist"
             }
-            // Set up pushState listener
             WebSocketManager.on("pushState") { args ->
                 try {
                     val state = args[0] as? JSONObject ?: return@on
@@ -147,7 +154,6 @@ class QueueActivity : ComponentActivity() {
             if (WebSocketManager.isConnected()) {
                 WebSocketManager.emit("getState")
             }
-            // Fetch queue
             if (WebSocketManager.isConnected()) {
                 fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
             } else {
@@ -205,11 +211,37 @@ class QueueActivity : ComponentActivity() {
                     .padding(padding)
                     .padding(16.dp)
             ) {
-                Text(
-                    text = "Queue",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.primary // Cyan
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Queue",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = if (themeMode == ThemeMode.DARK) "Dark" else "Light",
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Switch(
+                            checked = themeMode == ThemeMode.DARK,
+                            onCheckedChange = {
+                                onThemeModeChange(if (it) ThemeMode.DARK else ThemeMode.LIGHT)
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = MaterialTheme.colorScheme.primary,
+                                checkedTrackColor = MaterialTheme.colorScheme.primaryContainer,
+                                uncheckedThumbColor = MaterialTheme.colorScheme.onSurface,
+                                uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        )
+                    }
+                }
                 Spacer(modifier = Modifier.height(16.dp))
                 Button(
                     onClick = {
@@ -222,7 +254,7 @@ class QueueActivity : ComponentActivity() {
                     },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.secondary, // Red
+                        containerColor = MaterialTheme.colorScheme.secondary,
                         contentColor = MaterialTheme.colorScheme.onSecondary
                     )
                 ) {
@@ -238,7 +270,7 @@ class QueueActivity : ComponentActivity() {
                     },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.secondary, // Red
+                        containerColor = MaterialTheme.colorScheme.secondary,
                         contentColor = MaterialTheme.colorScheme.onSecondary
                     )
                 ) {
@@ -251,7 +283,7 @@ class QueueActivity : ComponentActivity() {
                     },
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.secondary, // Red
+                        containerColor = MaterialTheme.colorScheme.secondary,
                         contentColor = MaterialTheme.colorScheme.onSecondary
                     )
                 ) {
@@ -284,7 +316,7 @@ class QueueActivity : ComponentActivity() {
                                         Icon(
                                             painter = painterResource(id = android.R.drawable.arrow_up_float),
                                             contentDescription = "Move Up",
-                                            tint = MaterialTheme.colorScheme.secondary // Red
+                                            tint = MaterialTheme.colorScheme.secondary
                                         )
                                     }
                                 }
@@ -300,7 +332,7 @@ class QueueActivity : ComponentActivity() {
                                         Icon(
                                             painter = painterResource(id = android.R.drawable.arrow_down_float),
                                             contentDescription = "Move Down",
-                                            tint = MaterialTheme.colorScheme.secondary // Red
+                                            tint = MaterialTheme.colorScheme.secondary
                                         )
                                     }
                                 }
@@ -315,7 +347,7 @@ class QueueActivity : ComponentActivity() {
                                     Icon(
                                         painter = painterResource(id = android.R.drawable.ic_delete),
                                         contentDescription = "Remove",
-                                        tint = MaterialTheme.colorScheme.tertiary // Blue
+                                        tint = MaterialTheme.colorScheme.tertiary
                                     )
                                 }
                             }
