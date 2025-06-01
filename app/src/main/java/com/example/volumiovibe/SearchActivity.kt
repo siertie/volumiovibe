@@ -215,43 +215,19 @@ class SearchActivity : ComponentActivity() {
                 Spacer(modifier = Modifier.height(16.dp))
                 LazyColumn {
                     items(results) { track ->
-                        TrackItem(track = track, onAddToQueue = {
-                            coroutineScope.launch {
-                                addToQueue(track)
+                        TrackItem(
+                            track = track,
+                            actionButtons = {
+                                Button(onClick = {
+                                    coroutineScope.launch {
+                                        addToQueue(track)
+                                    }
+                                }) {
+                                    Text("Add")
+                                }
                             }
-                        })
+                        )
                     }
-                }
-            }
-        }
-    }
-
-    @Composable
-    fun TrackItem(track: Track, onAddToQueue: () -> Unit) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 4.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column {
-                    Text(
-                        text = track.title,
-                        style = MaterialTheme.typography.bodyLarge
-                    )
-                    Text(
-                        text = track.artist,
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-                Button(onClick = onAddToQueue) {
-                    Text("Add")
                 }
             }
         }
@@ -297,7 +273,8 @@ class SearchActivity : ComponentActivity() {
                                         title = item.getString("title"),
                                         artist = item.getString("artist"),
                                         uri = item.getString("uri"),
-                                        service = item.getString("service")
+                                        service = item.getString("service"),
+                                        albumArt = item.optString("albumart", null)
                                     )
                                 )
                             }
@@ -348,7 +325,8 @@ class SearchActivity : ComponentActivity() {
                                     title = item.getString("title"),
                                     artist = item.getString("artist"),
                                     uri = item.getString("uri"),
-                                    service = item.getString("service")
+                                    service = item.getString("service"),
+                                    albumArt = item.optString("albumart", null)
                                 )
                             )
                         }
@@ -430,16 +408,9 @@ class SearchActivity : ComponentActivity() {
             }
         }
     }
-
-    data class Track(
-        val title: String,
-        val artist: String,
-        val uri: String,
-        val service: String
-    )
 }
 
 object SearchStateHolder {
     var query: String = ""
-    var results: List<SearchActivity.Track> = emptyList()
+    var results: List<Track> = emptyList()
 }

@@ -36,14 +36,13 @@ class PlaylistActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
+            VolumioTheme {
                 PlaylistScreen(viewModel = viewModel())
             }
         }
     }
 }
 
-data class Track(val title: String, val artist: String, val uri: String, val type: String)
 data class Playlist(val name: String, val tracks: List<Track>)
 
 object PlaylistStateHolder {
@@ -205,10 +204,12 @@ class PlaylistViewModel : ViewModel() {
                             val title = item.optString("title", "")
                             val artist = item.optString("artist", "")
                             val uri = item.optString("uri", "")
+                            val service = item.optString("service", "mpd")
+                            val albumArt = item.optString("albumart", null)
                             if ((type == "song" || type == "folder-with-favourites") &&
                                 title.isNotBlank() && artist.isNotBlank() && uri.isNotBlank()
                             ) {
-                                results.add(Track(title, artist, uri, type))
+                                results.add(Track(title, artist, uri, service, albumArt, type))
                             }
                         }
                     }
@@ -786,10 +787,17 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
                             .height(200.dp)
                     ) {
                         items(playlist.tracks) { track ->
-                            TrackCard(
+                            TrackItem(
                                 track = track,
-                                onRemove = {
-                                    viewModel.removeFromPlaylist(playlist.name, track.uri)
+                                actionButtons = {
+                                    IconButton(onClick = {
+                                        viewModel.removeFromPlaylist(playlist.name, track.uri)
+                                    }) {
+                                        Icon(
+                                            painter = painterResource(id = android.R.drawable.ic_delete),
+                                            contentDescription = "Remove"
+                                        )
+                                    }
                                 }
                             )
                         }
@@ -808,11 +816,18 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
                             .height(150.dp)
                     ) {
                         items(viewModel.aiSuggestions) { track ->
-                            TrackCard(
+                            TrackItem(
                                 track = track,
-                                onAdd = {
-                                    viewModel.selectedPlaylist?.let { playlist ->
-                                        viewModel.addToPlaylist(playlist.name, track.uri, track.type)
+                                actionButtons = {
+                                    IconButton(onClick = {
+                                        viewModel.selectedPlaylist?.let { playlist ->
+                                            viewModel.addToPlaylist(playlist.name, track.uri, track.type)
+                                        }
+                                    }) {
+                                        Icon(
+                                            painter = painterResource(id = android.R.drawable.ic_menu_add),
+                                            contentDescription = "Add"
+                                        )
                                     }
                                 }
                             )
@@ -859,47 +874,6 @@ fun PlaylistCard(
                     painter = painterResource(id = android.R.drawable.ic_delete),
                     contentDescription = "Delete"
                 )
-            }
-        }
-    }
-}
-
-@Composable
-fun TrackCard(
-    track: Track,
-    onRemove: (() -> Unit)? = null,
-    onAdd: (() -> Unit)? = null
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 4.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = track.title, style = MaterialTheme.typography.bodyLarge)
-                Text(text = track.artist, style = MaterialTheme.typography.bodySmall)
-            }
-            onAdd?.let {
-                IconButton(onClick = it) {
-                    Icon(
-                        painter = painterResource(id = android.R.drawable.ic_menu_add),
-                        contentDescription = "Add"
-                    )
-                }
-            }
-            onRemove?.let {
-                IconButton(onClick = it) {
-                    Icon(
-                        painter = painterResource(id = android.R.drawable.ic_delete),
-                        contentDescription = "Remove"
-                    )
-                }
             }
         }
     }
