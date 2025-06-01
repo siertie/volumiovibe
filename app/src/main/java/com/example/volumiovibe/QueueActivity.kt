@@ -16,6 +16,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import com.example.volumiovibe.ui.theme.VolumioVibeTheme
 import kotlinx.coroutines.*
 import kotlinx.coroutines.Dispatchers.Main
 import okhttp3.*
@@ -44,8 +45,10 @@ class QueueActivity : ComponentActivity() {
             keepSplash = false
         }
         setContent {
-            VolumioTheme {
-                QueueScreen { refreshQueueCallback = it }
+            VolumioVibeTheme {
+                QueueScreen {
+                    refreshQueueCallback = it
+                }
             }
         }
     }
@@ -204,7 +207,8 @@ class QueueActivity : ComponentActivity() {
             ) {
                 Text(
                     text = "Queue",
-                    style = MaterialTheme.typography.headlineMedium
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.primary // Cyan
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Button(
@@ -216,7 +220,11 @@ class QueueActivity : ComponentActivity() {
                             }
                         }
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondary, // Red
+                        contentColor = MaterialTheme.colorScheme.onSecondary
+                    )
                 ) {
                     Text("Clear Queue")
                 }
@@ -228,7 +236,11 @@ class QueueActivity : ComponentActivity() {
                             addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                         })
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondary, // Red
+                        contentColor = MaterialTheme.colorScheme.onSecondary
+                    )
                 ) {
                     Text("Go to Search")
                 }
@@ -237,7 +249,11 @@ class QueueActivity : ComponentActivity() {
                     onClick = {
                         context.startActivity(Intent(context, PlaylistActivity::class.java))
                     },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondary, // Red
+                        contentColor = MaterialTheme.colorScheme.onSecondary
+                    )
                 ) {
                     Text("Go to Playlist")
                 }
@@ -268,7 +284,7 @@ class QueueActivity : ComponentActivity() {
                                         Icon(
                                             painter = painterResource(id = android.R.drawable.arrow_up_float),
                                             contentDescription = "Move Up",
-                                            tint = MaterialTheme.colorScheme.secondary
+                                            tint = MaterialTheme.colorScheme.secondary // Red
                                         )
                                     }
                                 }
@@ -284,7 +300,7 @@ class QueueActivity : ComponentActivity() {
                                         Icon(
                                             painter = painterResource(id = android.R.drawable.arrow_down_float),
                                             contentDescription = "Move Down",
-                                            tint = MaterialTheme.colorScheme.secondary
+                                            tint = MaterialTheme.colorScheme.secondary // Red
                                         )
                                     }
                                 }
@@ -299,7 +315,7 @@ class QueueActivity : ComponentActivity() {
                                     Icon(
                                         painter = painterResource(id = android.R.drawable.ic_delete),
                                         contentDescription = "Remove",
-                                        tint = MaterialTheme.colorScheme.error
+                                        tint = MaterialTheme.colorScheme.tertiary // Blue
                                     )
                                 }
                             }

@@ -36,7 +36,7 @@ class PlaylistActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            VolumioTheme {
+            MaterialTheme  {
                 PlaylistScreen(viewModel = viewModel())
             }
         }
