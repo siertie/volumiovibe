@@ -6,15 +6,14 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import kotlinx.coroutines.*
@@ -24,47 +23,6 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import androidx.compose.foundation.shape.RoundedCornerShape
-import coil.compose.AsyncImage
-import androidx.compose.material3.CardDefaults
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import coil.request.ImageRequest
-import androidx.compose.ui.layout.ContentScale
-import coil.request.CachePolicy
-import androidx.compose.ui.res.painterResource
-import androidx.constraintlayout.compose.ConstraintLayout
-import androidx.constraintlayout.compose.Dimension
-import androidx.compose.animation.core.*
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import coil.compose.AsyncImagePainter
-
-@Composable
-fun Modifier.shimmerPlaceholder(isLoading: Boolean): Modifier = this.then(
-    if (isLoading) {
-        val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
-        val alpha by infiniteTransition.animateFloat(
-            initialValue = 0.3f,
-            targetValue = 0.7f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(800, easing = LinearEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "shimmer_alpha"
-        )
-        Modifier.drawBehind {
-            drawRect(
-                color = Color(0xFFB0B0B0).copy(alpha = alpha),
-                topLeft = Offset.Zero,
-                size = Size(size.width, size.height)
-            )
-        }
-    } else {
-        Modifier
-    }
-)
 
 class QueueActivity : ComponentActivity() {
     private val volumioUrl = "http://volumio.local:3000"
@@ -289,140 +247,63 @@ class QueueActivity : ComponentActivity() {
                         items = queue,
                         key = { index, track -> "${track.uri}_$index" }
                     ) { index, track ->
-                        QueueItem(
+                        TrackItem(
                             track = track,
                             index = index,
-                            onPlay = {
+                            onClick = {
                                 coroutineScope.launch {
                                     playTrack(index, coroutineScope)
                                 }
                             },
-                            onRemove = {
-                                coroutineScope.launch {
-                                    removeFromQueue(index, coroutineScope)
-                                    fetchQueue(coroutineScope) { newQueue ->
-                                        queue = newQueue
+                            actionButtons = {
+                                if (index > 0) {
+                                    IconButton(onClick = {
+                                        coroutineScope.launch {
+                                            moveTrack(index, index - 1, coroutineScope)
+                                            fetchQueue(coroutineScope) { newQueue ->
+                                                queue = newQueue
+                                            }
+                                        }
+                                    }) {
+                                        Icon(
+                                            painter = painterResource(id = android.R.drawable.arrow_up_float),
+                                            contentDescription = "Move Up",
+                                            tint = MaterialTheme.colorScheme.secondary
+                                        )
                                     }
                                 }
-                            },
-                            onMoveUp = if (index > 0) {
-                                {
+                                if (index < queue.size - 1) {
+                                    IconButton(onClick = {
+                                        coroutineScope.launch {
+                                            moveTrack(index, index + 1, coroutineScope)
+                                            fetchQueue(coroutineScope) { newQueue ->
+                                                queue = newQueue
+                                            }
+                                        }
+                                    }) {
+                                        Icon(
+                                            painter = painterResource(id = android.R.drawable.arrow_down_float),
+                                            contentDescription = "Move Down",
+                                            tint = MaterialTheme.colorScheme.secondary
+                                        )
+                                    }
+                                }
+                                IconButton(onClick = {
                                     coroutineScope.launch {
-                                        moveTrack(index, index - 1, coroutineScope)
+                                        removeFromQueue(index, coroutineScope)
                                         fetchQueue(coroutineScope) { newQueue ->
                                             queue = newQueue
                                         }
                                     }
+                                }) {
+                                    Icon(
+                                        painter = painterResource(id = android.R.drawable.ic_delete),
+                                        contentDescription = "Remove",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
                                 }
-                            } else null,
-                            onMoveDown = if (index < queue.size - 1) {
-                                {
-                                    coroutineScope.launch {
-                                        moveTrack(index, index + 1, coroutineScope)
-                                        fetchQueue(coroutineScope) { newQueue ->
-                                            queue = newQueue
-                                        }
-                                    }
-                                }
-                            } else null
+                            }
                         )
-                    }
-                }
-            }
-        }
-    }
-
-    @Composable
-    fun QueueItem(
-        track: Track,
-        index: Int,
-        onPlay: () -> Unit,
-        onRemove: () -> Unit,
-        onMoveUp: (() -> Unit)?,
-        onMoveDown: (() -> Unit)?
-    ) {
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(vertical = 6.dp)
-                .clickable { onPlay() },
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surface,
-            contentColor = MaterialTheme.colorScheme.onSurface
-        ) {
-            ConstraintLayout(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp)
-            ) {
-                val (albumArt, titleText, artistText, buttons) = createRefs()
-                val albumArtUrl = when {
-                    track.albumArt.isNullOrEmpty() -> "https://via.placeholder.com/64"
-                    track.albumArt.startsWith("http") -> track.albumArt
-                    else -> "http://volumio.local:3000${track.albumArt}"
-                }
-                AsyncImage(
-                    model = ImageRequest.Builder(LocalContext.current)
-                        .data(albumArtUrl)
-                        .size(64, 64)
-                        .crossfade(true)
-                        .memoryCachePolicy(CachePolicy.ENABLED)
-                        .diskCachePolicy(CachePolicy.ENABLED)
-                        .build(),
-                    contentDescription = "Album Art",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(64.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .constrainAs(albumArt) {
-                            start.linkTo(parent.start)
-                            top.linkTo(parent.top)
-                            bottom.linkTo(parent.bottom)
-                        },
-                    placeholder = painterResource(id = R.drawable.placeholder),
-                    error = painterResource(id = R.drawable.ic_error)
-                )
-                Text(
-                    text = "${index + 1}. ${track.title}",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = Color.White,
-                    modifier = Modifier.constrainAs(titleText) {
-                        start.linkTo(albumArt.end, margin = 12.dp)
-                        top.linkTo(parent.top)
-                        end.linkTo(buttons.start, margin = 8.dp)
-                        width = Dimension.fillToConstraints
-                    }
-                )
-                Text(
-                    text = track.artist,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color(0xFFB0B0B0),
-                    modifier = Modifier.constrainAs(artistText) {
-                        start.linkTo(albumArt.end, margin = 12.dp)
-                        top.linkTo(titleText.bottom)
-                        end.linkTo(buttons.start, margin = 8.dp)
-                        width = Dimension.fillToConstraints
-                    }
-                )
-                Row(
-                    modifier = Modifier.constrainAs(buttons) {
-                        end.linkTo(parent.end)
-                        top.linkTo(parent.top)
-                        bottom.linkTo(parent.bottom)
-                    }
-                ) {
-                    if (onMoveUp != null) {
-                        TextButton(onClick = onMoveUp) {
-                            Text("↑", color = Color(0xFF03DAC6))
-                        }
-                    }
-                    if (onMoveDown != null) {
-                        TextButton(onClick = onMoveDown) {
-                            Text("↓", color = Color(0xFF03DAC6))
-                        }
-                    }
-                    TextButton(onClick = onRemove) {
-                        Text("X", color = Color(0xFFFF5555))
                     }
                 }
             }
@@ -452,7 +333,8 @@ class QueueActivity : ComponentActivity() {
                                 artist = item.getString("artist"),
                                 uri = item.getString("uri"),
                                 service = item.getString("service"),
-                                albumArt = item.optString("albumart", null)
+                                albumArt = item.optString("albumart", null),
+                                type = item.optString("type", "song")
                             )
                         )
                     }
@@ -498,7 +380,8 @@ class QueueActivity : ComponentActivity() {
                             artist = item.getString("artist"),
                             uri = item.getString("uri"),
                             service = item.getString("service"),
-                            albumArt = item.optString("albumart", null)
+                            albumArt = item.optString("albumart", null),
+                            type = item.optString("type", "song")
                         )
                     )
                 }
@@ -591,7 +474,7 @@ class QueueActivity : ComponentActivity() {
                         put("service", track.service)
                         put("title", track.title)
                         put("artist", track.artist)
-                        put("type", "song")
+                        put("type", track.type)
                     })
                 }
             })
@@ -706,7 +589,7 @@ class QueueActivity : ComponentActivity() {
                         put("service", track.service)
                         put("title", track.title)
                         put("artist", track.artist)
-                        put("type", "song")
+                        put("type", track.type)
                     })
                 }
             })
@@ -778,7 +661,8 @@ class QueueActivity : ComponentActivity() {
                             artist = item.getString("artist"),
                             uri = item.getString("uri"),
                             service = item.getString("service"),
-                            albumArt = item.optString("albumart", null)
+                            albumArt = item.optString("albumart", null),
+                            type = item.optString("type", "song")
                         )
                     )
                 }
@@ -788,12 +672,4 @@ class QueueActivity : ComponentActivity() {
         }
         results
     }
-
-    data class Track(
-        val title: String,
-        val artist: String,
-        val uri: String,
-        val service: String,
-        val albumArt: String?
-    )
 }
