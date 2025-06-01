@@ -15,23 +15,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
+import kotlinx.coroutines.*
+import kotlinx.coroutines.Dispatchers.Main
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.URLEncoder
-import kotlinx.coroutines.isActive
 
 class SearchActivity : ComponentActivity() {
-    private val volumioUrl = "http://volumio.local:3000"
-    private val client = OkHttpClient()
     private val TAG = "VolumioSearchActivity"
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -65,7 +54,7 @@ class SearchActivity : ComponentActivity() {
     fun SearchScreen() {
         var query by remember { mutableStateOf(SearchStateHolder.query) }
         var results by remember { mutableStateOf(SearchStateHolder.results) }
-        var statusText by remember { mutableStateOf("Volumio Status: connecting...") }
+        var statusText by remember { mutableStateOf("Volumio Status: connectin’...") }
         var seekPosition by remember { mutableStateOf(0f) }
         var trackDuration by remember { mutableStateOf(1f) }
         var isPlaying by remember { mutableStateOf(false) }
@@ -82,7 +71,7 @@ class SearchActivity : ComponentActivity() {
             SearchStateHolder.results = results
         }
         LaunchedEffect(Unit) {
-            Common.fetchStateFallback(context) { status, title, artist ->
+            Common.fetchState(context) { status: String, title: String, artist: String ->
                 statusText = "Volumio Status: $status\nNow Playin’: $title by $artist"
             }
             WebSocketManager.onConnectionChange { isConnected ->
@@ -136,8 +125,10 @@ class SearchActivity : ComponentActivity() {
                     statusText = "Volumio Status: error - $e"
                 }
             }
-            if (WebSocketManager.isConnected()) {
+            if (WebSocketManager.waitForConnection()) {
                 WebSocketManager.emit("getState")
+            } else {
+                WebSocketManager.reconnect()
             }
         }
         DisposableEffect(Unit) {
@@ -234,7 +225,7 @@ class SearchActivity : ComponentActivity() {
     }
 
     private suspend fun searchTracks(context: Context, query: String, onResultsReceived: (List<Track>) -> Unit) = withContext(Dispatchers.IO) {
-        Log.d(TAG, "Searching for query=$query")
+        Log.d(TAG, "Searchin’ for query=$query")
         if (query.isBlank()) {
             withContext(Dispatchers.Main) {
                 Toast.makeText(context, "Type somethin’, fam!", Toast.LENGTH_SHORT).show()
@@ -243,116 +234,75 @@ class SearchActivity : ComponentActivity() {
             return@withContext
         }
 
-        if (!WebSocketManager.isConnected()) {
-            Log.e(TAG, "WebSocket not connected for search")
-            withContext(Dispatchers.Main) {
-                Toast.makeText(context, "WebSocket ain’t connected!", Toast.LENGTH_SHORT).show()
+        var retries = 0
+        while (retries < 3) {
+            if (!WebSocketManager.waitForConnection()) {
+                Log.e(TAG, "WebSocket ain’t connected for search (retry $retries)")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "WebSocket dead, fam! Reconnectin’...", Toast.LENGTH_SHORT).show()
+                }
+                WebSocketManager.reconnect()
+                retries++
+                delay(2000)
+                continue
             }
-            searchTracksFallback(context, query, onResultsReceived)
-            return@withContext
-        }
 
-        val payload = JSONObject().apply {
-            put("value", query)
-        }
-        WebSocketManager.emit("search", payload) { args ->
-            try {
-                val jsonObject = args[0] as? JSONObject ?: return@emit
-                val lists = jsonObject.optJSONObject("navigation")?.optJSONArray("lists") ?: return@emit
-                val results = mutableListOf<Track>()
+            val payload = JSONObject().apply {
+                put("value", query)
+            }
+            WebSocketManager.emit("search", payload) { args ->
+                try {
+                    val jsonObject = args[0] as? JSONObject ?: return@emit
+                    val lists = jsonObject.optJSONObject("navigation")?.optJSONArray("lists") ?: return@emit
+                    val results = mutableListOf<Track>()
 
-                for (i in 0 until lists.length()) {
-                    val list = lists.getJSONObject(i)
-                    if (list.optString("title").contains("Tracks")) {
-                        val items = list.optJSONArray("items") ?: continue
-                        for (j in 0 until items.length()) {
-                            val item = items.getJSONObject(j)
-                            if (item.optString("type") == "song" && item.has("title") && item.has("artist") && item.has("uri")) {
-                                results.add(
-                                    Track(
-                                        title = item.getString("title"),
-                                        artist = item.getString("artist"),
-                                        uri = item.getString("uri"),
-                                        service = item.getString("service"),
-                                        albumArt = item.optString("albumart", null)
+                    for (i in 0 until lists.length()) {
+                        val list = lists.getJSONObject(i)
+                        if (list.optString("title").contains("Tracks")) {
+                            val items = list.optJSONArray("items") ?: continue
+                            for (j in 0 until items.length()) {
+                                val item = items.getJSONObject(j)
+                                if (item.optString("type") == "song" && item.has("title") && item.has("artist") && item.has("uri")) {
+                                    results.add(
+                                        Track(
+                                            title = item.getString("title"),
+                                            artist = item.getString("artist"),
+                                            uri = item.getString("uri"),
+                                            service = item.getString("service"),
+                                            albumArt = item.optString("albumart", null)
+                                        )
                                     )
-                                )
+                                }
                             }
                         }
                     }
-                }
-                Log.d(TAG, "Search response: Found ${results.size} tracks for query=$query")
-                onResultsReceived(results)
-            } catch (e: Exception) {
-                Log.e(TAG, "Search parse error: $e")
-                CoroutineScope(Dispatchers.Main).launch {
-                    Toast.makeText(context, "Search broke! $e", Toast.LENGTH_SHORT).show()
-                }
-                onResultsReceived(emptyList())
-            }
-        }
-    }
-
-    private suspend fun searchTracksFallback(context: Context, query: String, onResultsReceived: (List<Track>) -> Unit) = withContext(Dispatchers.IO) {
-        val url = "$volumioUrl/api/v1/search?query=${URLEncoder.encode(query, "UTF-8")}"
-        val request = Request.Builder().url(url).build()
-        try {
-            val response = client.newCall(request).execute()
-            if (!response.isSuccessful) {
-                Log.e(TAG, "REST search failed: ${response.code}")
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "REST search fucked up!", Toast.LENGTH_SHORT).show()
-                }
-                onResultsReceived(emptyList())
-                return@withContext
-            }
-
-            val json = response.body?.string() ?: return@withContext
-            Log.d(TAG, "REST search response: $json")
-            val results = mutableListOf<Track>()
-            val jsonObject = JSONObject(json)
-            val lists = jsonObject.optJSONObject("navigation")?.optJSONArray("lists") ?: return@withContext
-
-            for (i in 0 until lists.length()) {
-                val list = lists.getJSONObject(i)
-                if (list.optString("title").contains("Tracks")) {
-                    val items = list.optJSONArray("items") ?: continue
-                    for (j in 0 until items.length()) {
-                        val item = items.getJSONObject(j)
-                        if (item.optString("type") == "song" && item.has("title") && item.has("artist") && item.has("uri")) {
-                            results.add(
-                                Track(
-                                    title = item.getString("title"),
-                                    artist = item.getString("artist"),
-                                    uri = item.getString("uri"),
-                                    service = item.getString("service"),
-                                    albumArt = item.optString("albumart", null)
-                                )
-                            )
-                        }
+                    Log.d(TAG, "Search response: Found ${results.size} tracks for query=$query")
+                    onResultsReceived(results)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Search parse error: $e")
+                    CoroutineScope(Dispatchers.Main).launch {
+                        Toast.makeText(context, "Search broke! $e", Toast.LENGTH_SHORT).show()
                     }
+                    onResultsReceived(emptyList())
                 }
             }
-            Log.d(TAG, "REST search: Found ${results.size} tracks for query=$query")
-            withContext(Dispatchers.Main) {
-                onResultsReceived(results)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "REST search error: $e")
-            withContext(Dispatchers.Main) {
-                Toast.makeText(context, "REST search broke! $e", Toast.LENGTH_SHORT).show()
-            }
-            onResultsReceived(emptyList())
+            Log.d(TAG, "Sent search (retry $retries)")
+            return@withContext
         }
+        Log.e(TAG, "Gave up searchin’ after $retries tries")
+        withContext(Dispatchers.Main) {
+            Toast.makeText(context, "Search failed after retries, fam!", Toast.LENGTH_SHORT).show()
+        }
+        onResultsReceived(emptyList())
     }
 
     private suspend fun addToQueue(track: Track) = withContext(Dispatchers.IO) {
-        if (!WebSocketManager.isConnected()) {
-            Log.e(TAG, "WebSocket not connected for addToQueue")
+        if (!WebSocketManager.waitForConnection()) {
+            Log.e(TAG, "WebSocket ain’t connected for addToQueue")
             withContext(Dispatchers.Main) {
-                Toast.makeText(this@SearchActivity, "WebSocket ain’t connected!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@SearchActivity, "WebSocket dead, fam! Reconnectin’...", Toast.LENGTH_SHORT).show()
             }
-            addToQueueFallback(track)
+            WebSocketManager.reconnect()
             return@withContext
         }
 
@@ -364,47 +314,9 @@ class SearchActivity : ComponentActivity() {
             put("type", "song")
         }
         WebSocketManager.emit("addToQueue", payload) { args ->
-            Log.d(TAG, "Add to queue response: ${args.joinToString()}")
             CoroutineScope(Dispatchers.Main).launch {
+                Log.d(TAG, "Add to queue response: ${args.joinToString()}")
                 Toast.makeText(this@SearchActivity, "Added ${track.title}, yo!", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    private suspend fun addToQueueFallback(track: Track) = withContext(Dispatchers.IO) {
-        val url = "$volumioUrl/api/v1/addToQueue"
-        val payload = JSONArray().put(
-            JSONObject().apply {
-                put("uri", track.uri)
-                put("service", track.service)
-                put("title", track.title)
-                put("artist", track.artist)
-                put("type", "song")
-            }
-        )
-        val body = payload.toString().toRequestBody("application/json".toMediaType())
-        val request = Request.Builder()
-            .url(url)
-            .post(body)
-            .build()
-        try {
-            val response = client.newCall(request).execute()
-            val responseBody = response.body?.string()
-            Log.d(TAG, "REST add to queue response: $responseBody")
-            if (!response.isSuccessful) {
-                Log.e(TAG, "REST queue add failed: ${response.code}")
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@SearchActivity, "Couldn’t add ${track.title}!", Toast.LENGTH_SHORT).show()
-                }
-            } else {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@SearchActivity, "Added ${track.title}, yo!", Toast.LENGTH_SHORT).show()
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "REST queue add error: $e")
-            withContext(Dispatchers.Main) {
-                Toast.makeText(this@SearchActivity, "REST queue add broke! $e", Toast.LENGTH_SHORT).show()
             }
         }
     }

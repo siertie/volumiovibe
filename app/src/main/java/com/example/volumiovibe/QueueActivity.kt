@@ -21,15 +21,10 @@ import com.example.volumiovibe.ui.theme.AppTheme
 import com.example.volumiovibe.ui.theme.ThemeMode
 import kotlinx.coroutines.*
 import kotlinx.coroutines.Dispatchers.Main
-import okhttp3.*
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 
 class QueueActivity : ComponentActivity() {
-    private val volumioUrl = "http://volumio.local:3000"
-    private val client = OkHttpClient()
     private val TAG = "VolumioQueueActivity"
     private var refreshQueueCallback: (() -> Unit)? = null
 
@@ -40,9 +35,9 @@ class QueueActivity : ComponentActivity() {
         CoroutineScope(Dispatchers.Main).launch {
             WebSocketManager.initialize()
             if (WebSocketManager.waitForConnection()) {
-                Log.d(TAG, "WebSocket connected")
+                Log.d(TAG, "WebSocket connected, yo!")
             } else {
-                Log.d(TAG, "WebSocket failed, using REST fallback")
+                Log.e(TAG, "WebSocket failed, fam")
             }
             keepSplash = false
         }
@@ -60,14 +55,14 @@ class QueueActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        Log.d(TAG, "onResume: Checking WebSocket")
+        Log.d(TAG, "onResume: Checkin’ WebSocket")
         WebSocketManager.reconnect()
         refreshQueueCallback?.invoke()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        Log.d(TAG, "onDestroy: Activity destroyed, isFinishing=$isFinishing")
+        Log.d(TAG, "onDestroy: Activity dead, isFinishing=$isFinishing")
     }
 
     @Composable
@@ -77,7 +72,7 @@ class QueueActivity : ComponentActivity() {
         onThemeModeChange: (ThemeMode) -> Unit
     ) {
         var queue by remember { mutableStateOf<List<Track>>(emptyList()) }
-        var statusText by remember { mutableStateOf("Volumio Status: connecting...") }
+        var statusText by remember { mutableStateOf("Volumio Status: connectin’...") }
         var seekPosition by remember { mutableStateOf(0f) }
         var trackDuration by remember { mutableStateOf(1f) }
         var isPlaying by remember { mutableStateOf(false) }
@@ -93,7 +88,10 @@ class QueueActivity : ComponentActivity() {
                     if (WebSocketManager.waitForConnection()) {
                         fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
                     } else {
-                        fetchQueueFallback { newQueue -> queue = newQueue }
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "WebSocket dead, fam! Tryna reconnect.", Toast.LENGTH_SHORT).show()
+                        }
+                        WebSocketManager.reconnect()
                     }
                 }
             }
@@ -101,16 +99,13 @@ class QueueActivity : ComponentActivity() {
                 coroutineScope.launch {
                     withContext(Dispatchers.Main) {
                         if (!isConnected) {
-                            Toast.makeText(context, "WebSocket ain’t connected, fam!", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "WebSocket dropped, fam! Reconnectin’...", Toast.LENGTH_SHORT).show()
                             WebSocketManager.reconnect()
                         } else {
                             Toast.makeText(context, "WebSocket connected, yo!", Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
-            }
-            Common.fetchStateFallback(context) { status, title, artist ->
-                statusText = "Volumio Status: $status\nNow Playin’: $title by $artist"
             }
             WebSocketManager.on("pushState") { args ->
                 try {
@@ -151,13 +146,15 @@ class QueueActivity : ComponentActivity() {
                     statusText = "Volumio Status: error - $e"
                 }
             }
-            if (WebSocketManager.isConnected()) {
+            // Wait for connection and fetch queue/state
+            if (WebSocketManager.waitForConnection()) {
                 WebSocketManager.emit("getState")
-            }
-            if (WebSocketManager.isConnected()) {
                 fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
             } else {
-                fetchQueueFallback { newQueue -> queue = newQueue }
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "WebSocket dead, fam! Reconnectin’...", Toast.LENGTH_SHORT).show()
+                }
+                WebSocketManager.reconnect()
             }
         }
 
@@ -263,7 +260,7 @@ class QueueActivity : ComponentActivity() {
                 Spacer(modifier = Modifier.height(8.dp))
                 Button(
                     onClick = {
-                        Log.d(TAG, "Navigating to SearchActivity with CLEAR_TOP | SINGLE_TOP")
+                        Log.d(TAG, "Navigatin’ to SearchActivity with CLEAR_TOP | SINGLE_TOP")
                         context.startActivity(Intent(context, SearchActivity::class.java).apply {
                             addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                         })
@@ -359,99 +356,65 @@ class QueueActivity : ComponentActivity() {
     }
 
     private suspend fun fetchQueue(scope: CoroutineScope, onQueueReceived: (List<Track>) -> Unit) = withContext(Dispatchers.IO) {
-        if (!WebSocketManager.isConnected()) {
-            Log.e(TAG, "WebSocket not connected for fetchQueue")
-            withContext(Main) {
-                Toast.makeText(this@QueueActivity, "WebSocket ain’t connected!", Toast.LENGTH_SHORT).show()
+        var retries = 0
+        while (retries < 3) {
+            if (!WebSocketManager.waitForConnection()) {
+                Log.e(TAG, "WebSocket ain’t connected for fetchQueue (retry $retries)")
+                withContext(Main) {
+                    Toast.makeText(this@QueueActivity, "WebSocket dead, fam! Reconnectin’...", Toast.LENGTH_SHORT).show()
+                }
+                WebSocketManager.reconnect()
+                retries++
+                delay(2000)
+                continue
             }
-            fetchQueueFallback(onQueueReceived)
+
+            WebSocketManager.emit("getQueue", null) { args ->
+                try {
+                    val queueArray = args[0] as? JSONArray ?: return@emit
+                    val results = mutableListOf<Track>()
+                    for (i in 0 until queueArray.length()) {
+                        val item = queueArray.getJSONObject(i)
+                        if (item.has("name") && item.has("artist") && item.has("uri")) {
+                            results.add(
+                                Track(
+                                    title = item.getString("name"),
+                                    artist = item.getString("artist"),
+                                    uri = item.getString("uri"),
+                                    service = item.getString("service"),
+                                    albumArt = item.optString("albumart", null),
+                                    type = item.optString("type", "song")
+                                )
+                            )
+                        }
+                    }
+                    Log.d(TAG, "Got queue: $queueArray")
+                    onQueueReceived(results)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Queue parse error: $e")
+                    scope.launch {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(this@QueueActivity, "Queue fetch fucked up! $e", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }
+            Log.d(TAG, "Sent getQueue (retry $retries)")
             return@withContext
         }
-
-        WebSocketManager.emit("getQueue", null) { args ->
-            try {
-                val queueArray = args[0] as? JSONArray ?: return@emit
-                val results = mutableListOf<Track>()
-                for (i in 0 until queueArray.length()) {
-                    val item = queueArray.getJSONObject(i)
-                    if (item.has("name") && item.has("artist") && item.has("uri")) {
-                        results.add(
-                            Track(
-                                title = item.getString("name"),
-                                artist = item.getString("artist"),
-                                uri = item.getString("uri"),
-                                service = item.getString("service"),
-                                albumArt = item.optString("albumart", null),
-                                type = item.optString("type", "song")
-                            )
-                        )
-                    }
-                }
-                Log.d(TAG, "Received queue: $queueArray")
-                onQueueReceived(results)
-            } catch (e: Exception) {
-                Log.e(TAG, "Queue parse error: $e")
-                scope.launch {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(this@QueueActivity, "Queue fetch broke! $e", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-        }
-    }
-
-    private suspend fun fetchQueueFallback(onQueueReceived: (List<Track>) -> Unit) = withContext(Dispatchers.IO) {
-        val url = "$volumioUrl/api/v1/getQueue"
-        val request = Request.Builder().url(url).build()
-        try {
-            val response = client.newCall(request).execute()
-            if (!response.isSuccessful) {
-                Log.e(TAG, "REST queue fetch failed: ${response.code}")
-                withContext(Main) {
-                    Toast.makeText(this@QueueActivity, "REST queue fetch fucked up!", Toast.LENGTH_SHORT).show()
-                }
-                return@withContext
-            }
-
-            val json = response.body?.string() ?: return@withContext
-            Log.d(TAG, "REST queue response: $json")
-            val results = mutableListOf<Track>()
-            val jsonObject = JSONObject(json)
-            val queueArray = jsonObject.optJSONArray("queue") ?: return@withContext
-
-            for (i in 0 until queueArray.length()) {
-                val item = queueArray.getJSONObject(i)
-                if (item.has("name") && item.has("artist") && item.has("uri")) {
-                    results.add(
-                        Track(
-                            title = item.getString("name"),
-                            artist = item.getString("artist"),
-                            uri = item.getString("uri"),
-                            service = item.getString("service"),
-                            albumArt = item.optString("albumart", null),
-                            type = item.optString("type", "song")
-                        )
-                    )
-                }
-            }
-            withContext(Main) {
-                onQueueReceived(results)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "REST queue fetch error: $e")
-            withContext(Main) {
-                Toast.makeText(this@QueueActivity, "REST queue fetch broke! $e", Toast.LENGTH_SHORT).show()
-            }
+        Log.e(TAG, "Gave up fetchin’ queue after $retries tries")
+        withContext(Main) {
+            Toast.makeText(this@QueueActivity, "Queue fetch failed after retries, fam!", Toast.LENGTH_SHORT).show()
         }
     }
 
     private suspend fun clearQueue(scope: CoroutineScope) = withContext(Dispatchers.IO) {
-        if (!WebSocketManager.isConnected()) {
-            Log.e(TAG, "WebSocket not connected for clearQueue")
+        if (!WebSocketManager.waitForConnection()) {
+            Log.e(TAG, "WebSocket ain’t connected for clearQueue")
             withContext(Main) {
-                Toast.makeText(this@QueueActivity, "WebSocket ain’t connected!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@QueueActivity, "WebSocket dead, fam! Reconnectin’...", Toast.LENGTH_SHORT).show()
             }
-            clearQueueFallback()
+            WebSocketManager.reconnect()
             return@withContext
         }
 
@@ -465,34 +428,13 @@ class QueueActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun clearQueueFallback() = withContext(Dispatchers.IO) {
-        val url = "$volumioUrl/api/v1/commands/?cmd=clearQueue"
-        val request = Request.Builder().url(url).build()
-        try {
-            val response = client.newCall(request).execute()
-            val responseBody = response.body?.string()
-            Log.d(TAG, "REST clear queue response: $responseBody")
-            if (!response.isSuccessful) {
-                Log.e(TAG, "REST clear queue failed: ${response.code}")
-                withContext(Main) {
-                    Toast.makeText(this@QueueActivity, "REST clear queue fucked up!", Toast.LENGTH_SHORT).show()
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "REST clear queue error: $e")
-            withContext(Main) {
-                Toast.makeText(this@QueueActivity, "REST clear queue broke! $e", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
     private suspend fun playTrack(index: Int, scope: CoroutineScope) = withContext(Dispatchers.IO) {
-        if (!WebSocketManager.isConnected()) {
-            Log.e(TAG, "WebSocket not connected for playTrack")
+        if (!WebSocketManager.waitForConnection()) {
+            Log.e(TAG, "WebSocket ain’t connected for playTrack")
             withContext(Main) {
-                Toast.makeText(this@QueueActivity, "WebSocket ain’t connected!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@QueueActivity, "WebSocket dead, fam! Reconnectin’...", Toast.LENGTH_SHORT).show()
             }
-            playTrackFallback(index)
+            WebSocketManager.reconnect()
             return@withContext
         }
 
@@ -509,59 +451,13 @@ class QueueActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun playTrackFallback(index: Int) = withContext(Dispatchers.IO) {
-        val queue = fetchQueueFallbackSync()
-        if (queue.isEmpty() || index < 0 || index >= queue.size) return@withContext
-
-        val url = "$volumioUrl/api/v1/replaceAndPlay"
-        val payload = JSONObject().apply {
-            put("list", JSONArray().apply {
-                queue.forEach { track ->
-                    put(JSONObject().apply {
-                        put("uri", track.uri)
-                        put("service", track.service)
-                        put("title", track.title)
-                        put("artist", track.artist)
-                        put("type", track.type)
-                    })
-                }
-            })
-            put("index", index)
-        }
-        val body = payload.toString().toRequestBody("application/json".toMediaType())
-        val request = Request.Builder()
-            .url(url)
-            .post(body)
-            .build()
-        try {
-            val response = client.newCall(request).execute()
-            val responseBody = response.body?.string()
-            Log.d(TAG, "REST play track response: $responseBody")
-            if (!response.isSuccessful) {
-                Log.e(TAG, "REST play track failed: ${response.code}")
-                withContext(Main) {
-                    Toast.makeText(this@QueueActivity, "REST play track fucked up!", Toast.LENGTH_SHORT).show()
-                }
-            } else {
-                withContext(Main) {
-                    Toast.makeText(this@QueueActivity, "Playin’ ${queue[index].title}, yo!", Toast.LENGTH_SHORT).show()
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "REST play track error: $e")
-            withContext(Main) {
-                Toast.makeText(this@QueueActivity, "REST play track broke! $e", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
     private suspend fun removeFromQueue(index: Int, scope: CoroutineScope) = withContext(Dispatchers.IO) {
-        if (!WebSocketManager.isConnected()) {
-            Log.e(TAG, "WebSocket not connected for removeFromQueue")
+        if (!WebSocketManager.waitForConnection()) {
+            Log.e(TAG, "WebSocket ain’t connected for removeFromQueue")
             withContext(Main) {
-                Toast.makeText(this@QueueActivity, "WebSocket ain’t connected!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@QueueActivity, "WebSocket dead, fam! Reconnectin’...", Toast.LENGTH_SHORT).show()
             }
-            removeFromQueueFallback(index)
+            WebSocketManager.reconnect()
             return@withContext
         }
 
@@ -578,20 +474,13 @@ class QueueActivity : ComponentActivity() {
         }
     }
 
-    private suspend fun removeFromQueueFallback(index: Int) = withContext(Dispatchers.IO) {
-        val queue = fetchQueueFallbackSync()
-        if (index < 0 || index >= queue.size) return@withContext
-        queue.removeAt(index)
-        updateQueueFallback(queue)
-    }
-
     private suspend fun moveTrack(fromIndex: Int, toIndex: Int, scope: CoroutineScope) = withContext(Dispatchers.IO) {
-        if (!WebSocketManager.isConnected()) {
-            Log.e(TAG, "WebSocket not connected for moveTrack")
+        if (!WebSocketManager.waitForConnection()) {
+            Log.e(TAG, "WebSocket ain’t connected for moveTrack")
             withContext(Main) {
-                Toast.makeText(this@QueueActivity, "WebSocket ain’t connected!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@QueueActivity, "WebSocket dead, fam! Reconnectin’...", Toast.LENGTH_SHORT).show()
             }
-            moveTrackFallback(fromIndex, toIndex)
+            WebSocketManager.reconnect()
             return@withContext
         }
 
@@ -600,124 +489,12 @@ class QueueActivity : ComponentActivity() {
             put("to", toIndex)
         }
         WebSocketManager.emit("moveQueue", payload) { args ->
-            Log.d(TAG, "Received pushQueue: ${args.joinToString()}")
+            Log.d(TAG, "Got pushQueue: ${args.joinToString()}")
             scope.launch {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@QueueActivity, "Moved track, yo!", Toast.LENGTH_SHORT).show()
                 }
             }
         }
-    }
-
-    private suspend fun moveTrackFallback(fromIndex: Int, toIndex: Int) = withContext(Dispatchers.IO) {
-        val queue = fetchQueueFallbackSync()
-        if (fromIndex < 0 || fromIndex >= queue.size || toIndex < 0 || toIndex >= queue.size) return@withContext
-        val track = queue.removeAt(fromIndex)
-        queue.add(toIndex, track)
-        updateQueueFallback(queue)
-    }
-
-    private suspend fun updateQueueFallback(queue: List<Track>) = withContext(Dispatchers.IO) {
-        val currentUri = getCurrentTrackUri()
-        var playIndex = 0
-        if (currentUri != null) {
-            queue.forEachIndexed { index, track ->
-                if (track.uri == currentUri) {
-                    playIndex = index
-                }
-            }
-        }
-
-        val url = "$volumioUrl/api/v1/replaceAndPlay"
-        val payload = JSONObject().apply {
-            put("list", JSONArray().apply {
-                queue.forEach { track ->
-                    put(JSONObject().apply {
-                        put("uri", track.uri)
-                        put("service", track.service)
-                        put("title", track.title)
-                        put("artist", track.artist)
-                        put("type", track.type)
-                    })
-                }
-            })
-            put("index", playIndex)
-        }
-        val body = payload.toString().toRequestBody("application/json".toMediaType())
-        val request = Request.Builder()
-            .url(url)
-            .post(body)
-            .build()
-        try {
-            val response = client.newCall(request).execute()
-            val responseBody = response.body?.string()
-            Log.d(TAG, "REST update queue response: $responseBody")
-            if (!response.isSuccessful) {
-                Log.e(TAG, "REST update queue failed: ${response.code}")
-                withContext(Main) {
-                    Toast.makeText(this@QueueActivity, "REST queue update fucked up!", Toast.LENGTH_SHORT).show()
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "REST update queue error: $e")
-            withContext(Main) {
-                Toast.makeText(this@QueueActivity, "REST queue update broke! $e", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    private suspend fun getCurrentTrackUri(): String? = withContext(Dispatchers.IO) {
-        val url = "$volumioUrl/api/v1/getState"
-        val request = Request.Builder().url(url).build()
-        try {
-            val response = client.newCall(request).execute()
-            if (!response.isSuccessful) {
-                Log.e(TAG, "Get state failed: ${response.code}")
-                return@withContext null
-            }
-            val json = response.body?.string() ?: return@withContext null
-            val jsonObject = JSONObject(json)
-            return@withContext jsonObject.optString("uri", null)
-        } catch (e: Exception) {
-            Log.e(TAG, "Get state error: $e")
-            return@withContext null
-        }
-    }
-
-    private suspend fun fetchQueueFallbackSync(): MutableList<Track> = withContext(Dispatchers.IO) {
-        val url = "$volumioUrl/api/v1/getQueue"
-        val request = Request.Builder().url(url).build()
-        val results = mutableListOf<Track>()
-        try {
-            val response = client.newCall(request).execute()
-            if (!response.isSuccessful) {
-                Log.e(TAG, "REST queue fetch failed: ${response.code}")
-                return@withContext results
-            }
-
-            val json = response.body?.string() ?: return@withContext results
-            Log.d(TAG, "REST queue response: $json")
-            val jsonObject = JSONObject(json)
-            val queueArray = jsonObject.optJSONArray("queue") ?: return@withContext results
-
-            for (i in 0 until queueArray.length()) {
-                val item = queueArray.getJSONObject(i)
-                if (item.has("name") && item.has("artist") && item.has("uri")) {
-                    results.add(
-                        Track(
-                            title = item.getString("name"),
-                            artist = item.getString("artist"),
-                            uri = item.getString("uri"),
-                            service = item.getString("service"),
-                            albumArt = item.optString("albumart", null),
-                            type = item.optString("type", "song")
-                        )
-                    )
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "REST queue fetch error: $e")
-        }
-        results
     }
 }

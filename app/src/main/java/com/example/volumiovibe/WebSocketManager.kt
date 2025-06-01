@@ -20,28 +20,28 @@ object WebSocketManager {
 
     fun initialize() {
         if (isInitialized && isConnected()) {
-            Log.d(TAG, "WebSocket already initialized and connected")
+            Log.d(TAG, "WebSocket already good, fam")
             return
         }
         try {
             val opts = IO.Options().apply {
                 forceNew = true
                 reconnection = true
-                reconnectionAttempts = Int.MAX_VALUE
+                reconnectionAttempts = 10
                 reconnectionDelay = 1000
-                reconnectionDelayMax = 5000
+                reconnectionDelayMax = 10000
                 transports = arrayOf("websocket")
                 query = "EIO=3"
             }
             socket = IO.socket(volumioUrl, opts)
             socket?.on(Socket.EVENT_CONNECT) {
                 isConnected = true
-                Log.d(TAG, "WebSocket connected")
+                Log.d(TAG, "WebSocket connected, yo!")
                 notifyConnectionChange(true)
             }
             socket?.on(Socket.EVENT_DISCONNECT) {
                 isConnected = false
-                Log.w(TAG, "WebSocket disconnected: ${it.joinToString()}")
+                Log.w(TAG, "WebSocket dropped: ${it.joinToString()}")
                 notifyConnectionChange(false)
             }
             socket?.on(Socket.EVENT_CONNECT_ERROR) {
@@ -53,14 +53,13 @@ object WebSocketManager {
             isInitialized = true
             Log.d(TAG, "WebSocket initialized")
         } catch (e: URISyntaxException) {
-            Log.e(TAG, "Invalid WebSocket URL: $e")
+            Log.e(TAG, "Bad WebSocket URL: $e")
         }
     }
 
     fun isConnected(): Boolean = isConnected && socket?.connected() == true
 
-    // New: Wait for connection
-    suspend fun waitForConnection(timeoutMs: Long = 3000): Boolean {
+    suspend fun waitForConnection(timeoutMs: Long = 15000): Boolean {
         val start = System.currentTimeMillis()
         while (!isConnected() && System.currentTimeMillis() - start < timeoutMs) {
             delay(100)
@@ -70,20 +69,20 @@ object WebSocketManager {
 
     fun emit(event: String, data: Any? = null, onResponse: ((Array<Any>) -> Unit)? = null) {
         if (!isConnected()) {
-            Log.e(TAG, "WebSocket not connected for event: $event")
+            Log.e(TAG, "WebSocket ain’t ready for event: $event")
             return
         }
         if (data != null) {
             socket?.emit(event, data)
-            Log.d(TAG, "Emitted $event: $data")
+            Log.d(TAG, "Sent $event: $data")
         } else {
             socket?.emit(event)
-            Log.d(TAG, "Emitted $event")
+            Log.d(TAG, "Sent $event")
         }
         onResponse?.let { callback ->
             socket?.once(getResponseEvent(event)) { args ->
                 CoroutineScope(Dispatchers.Main).launch {
-                    Log.d(TAG, "Received response for $event: ${args.joinToString()}")
+                    Log.d(TAG, "Got response for $event: ${args.joinToString()}")
                     callback(args)
                 }
             }
@@ -93,11 +92,11 @@ object WebSocketManager {
     fun on(event: String, callback: (Array<Any>) -> Unit) {
         socket?.on(event) { args ->
             CoroutineScope(Dispatchers.Main).launch {
-                Log.d(TAG, "Received event $event: ${args.joinToString()}")
+                Log.d(TAG, "Got event $event: ${args.joinToString()}")
                 callback(args)
             }
         }
-        Log.d(TAG, "Registered listener for event: $event")
+        Log.d(TAG, "Set listener for event: $event")
     }
 
     fun debugAllEvents() {
@@ -108,11 +107,11 @@ object WebSocketManager {
         knownEvents.forEach { event ->
             socket?.on(event) { args ->
                 CoroutineScope(Dispatchers.Main).launch {
-                    Log.d(TAG, "Debug: Received event $event: ${args.joinToString()}")
+                    Log.d(TAG, "Debug: Got event $event: ${args.joinToString()}")
                 }
             }
         }
-        socket ?: Log.w(TAG, "Socket is null, can’t debug events")
+        socket ?: Log.w(TAG, "Socket null, can’t debug shit")
     }
 
     fun onConnectionChange(listener: (Boolean) -> Unit) {
@@ -123,15 +122,22 @@ object WebSocketManager {
         connectionListeners.forEach { it(isConnected) }
     }
 
-    // Cleaned-up reconnect
     fun reconnect() {
         if (!isConnected() && socket != null) {
             CoroutineScope(Dispatchers.IO).launch {
                 Log.d(TAG, "Tryna reconnect WebSocket")
-                socket?.connect()
-                if (!waitForConnection(5000)) {
-                    Log.e(TAG, "Reconnect failed, fam")
+                var retries = 0
+                while (retries < 5 && !isConnected()) {
+                    socket?.connect()
+                    if (!waitForConnection(15000)) {
+                        Log.w(TAG, "Reconnect attempt $retries failed")
+                        retries++
+                    } else {
+                        Log.d(TAG, "Reconnect worked, yo!")
+                        return@launch
+                    }
                 }
+                Log.e(TAG, "Reconnect failed after $retries tries, fam")
             }
         }
     }
@@ -152,6 +158,6 @@ object WebSocketManager {
         isInitialized = false
         isConnected = false
         connectionListeners.clear()
-        Log.d(TAG, "WebSocket disconnected")
+        Log.d(TAG, "WebSocket shut down")
     }
 }

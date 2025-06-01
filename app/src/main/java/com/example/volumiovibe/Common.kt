@@ -3,83 +3,58 @@ package com.example.volumiovibe
 import android.content.Context
 import android.util.Log
 import android.widget.Toast
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import org.json.JSONObject
 
 object Common {
-    private const val volumioUrl = "http://volumio.local:3000"
-    private val client = OkHttpClient()
     private const val TAG = "VolumioCommon"
 
     suspend fun sendCommand(context: Context, command: String) = withContext(Dispatchers.IO) {
-        if (!WebSocketManager.isConnected()) {
-            Log.e(TAG, "WebSocket not connected for $command")
+        if (!WebSocketManager.waitForConnection()) {
+            Log.e(TAG, "WebSocket ain’t connected for $command")
             withContext(Dispatchers.Main) {
-                Toast.makeText(context, "WebSocket ain’t connected!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "WebSocket dead, fam! Reconnectin’...", Toast.LENGTH_SHORT).show()
             }
-            sendCommandFallback(context, command)
+            WebSocketManager.reconnect()
             return@withContext
         }
 
         WebSocketManager.emit(command, null) { args ->
-            if (command == "play") {
-                Toast.makeText(context, "Playin’, yo!", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    private suspend fun sendCommandFallback(context: Context, command: String) = withContext(Dispatchers.IO) {
-        val url = "$volumioUrl/api/v1/commands/?cmd=$command"
-        val request = Request.Builder().url(url).build()
-        try {
-            val response = client.newCall(request).execute()
-            withContext(Dispatchers.Main) {
-                if (response.isSuccessful) {
-                    Log.d(TAG, "REST command: $command")
-                    if (command == "play") {
-                        Toast.makeText(context, "Playin’, yo!", Toast.LENGTH_SHORT).show()
-                    }
-                } else {
-                    Log.e(TAG, "REST command failed: ${response.code}")
-                    Toast.makeText(context, "$command fucked up!", Toast.LENGTH_SHORT).show()
+            CoroutineScope(Dispatchers.Main).launch {
+                if (command == "play") {
+                    Toast.makeText(context, "Playin’, yo!", Toast.LENGTH_SHORT).show()
                 }
-            }
-        } catch (e: Exception) {
-            withContext(Dispatchers.Main) {
-                Log.e(TAG, "REST command error: $e")
-                Toast.makeText(context, "$command broke, fam! $e", Toast.LENGTH_SHORT).show()
+                Log.d(TAG, "Command $command response: ${args.joinToString()}")
             }
         }
     }
 
-    suspend fun fetchStateFallback(context: Context, onStateReceived: (String, String, String) -> Unit) = withContext(Dispatchers.IO) {
-        val url = "$volumioUrl/api/v1/getState"
-        val request = Request.Builder().url(url).build()
-        try {
-            val response = client.newCall(request).execute()
-            if (response.isSuccessful) {
-                val json = response.body?.string() ?: return@withContext
-                val jsonObject = JSONObject(json)
-                val status = jsonObject.getString("status")
-                val title = jsonObject.optString("title", "Nothin’ playin’")
-                val artist = jsonObject.optString("artist", "")
-                withContext(Dispatchers.Main) {
+    suspend fun fetchState(context: Context, onStateReceived: (String, String, String) -> Unit) = withContext(Dispatchers.IO) {
+        if (!WebSocketManager.waitForConnection()) {
+            Log.e(TAG, "WebSocket ain’t connected for fetchState")
+            withContext(Dispatchers.Main) {
+                Toast.makeText(context, "WebSocket dead, fam! Reconnectin’...", Toast.LENGTH_SHORT).show()
+            }
+            WebSocketManager.reconnect()
+            return@withContext
+        }
+
+        WebSocketManager.emit("getState", null) { args ->
+            CoroutineScope(Dispatchers.Main).launch {
+                try {
+                    val state = args[0] as? JSONObject ?: return@launch
+                    val status = state.getString("status")
+                    val title = state.optString("title", "Nothin’ playin’")
+                    val artist = state.optString("artist", "")
                     onStateReceived(status, title, artist)
-                    Log.d(TAG, "REST state fetched: $status, $title by $artist")
+                    Log.d(TAG, "WebSocket state fetched: $status, $title by $artist")
+                } catch (e: Exception) {
+                    Log.e(TAG, "WebSocket state parse error: $e")
+                    Toast.makeText(context, "State fetch fucked up! $e", Toast.LENGTH_SHORT).show()
                 }
-            } else {
-                Log.e(TAG, "REST state fetch failed: ${response.code}")
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "REST state fetch fucked up!", Toast.LENGTH_SHORT).show()
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "REST state fetch error: $e")
-            withContext(Dispatchers.Main) {
-                Toast.makeText(context, "REST state fetch broke! $e", Toast.LENGTH_SHORT).show()
             }
         }
     }
