@@ -6,9 +6,6 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -78,9 +75,9 @@ class PlaylistViewModel : ViewModel() {
     private val client = OkHttpClient()
 
     var playlists by mutableStateOf<List<Playlist>>(emptyList())
-    var selectedPlaylist by mutableStateOf<Playlist?>(null)
     var isLoading by mutableStateOf(false)
     var aiSuggestions by mutableStateOf<List<Track>>(emptyList())
+    private val pendingTracks = mutableMapOf<String, MutableList<Track>>()
 
     private val _selectedVibe = mutableStateOf(PlaylistStateHolder.selectedVibe)
     var selectedVibe: String
@@ -178,7 +175,9 @@ class PlaylistViewModel : ViewModel() {
                     for (i in 0 until data.length()) {
                         val item = data.get(i)
                         if (item is String && item != "undefined") {
-                            newPlaylists.add(Playlist(name = item, tracks = emptyList()))
+                            val tracks = pendingTracks[item] ?: emptyList<Track>()
+                            newPlaylists.add(Playlist(name = item, tracks = tracks))
+                            Log.d(TAG, "Added playlist $item with ${tracks.size} tracks from pendingTracks")
                         } else {
                             Log.w(TAG, "Skipping invalid playlist item: $item")
                         }
@@ -206,29 +205,47 @@ class PlaylistViewModel : ViewModel() {
                             return@on
                         }
                     }
+                    Log.d(TAG, "Raw pushBrowseLibrary response: $data")
                     val navigation = data.optJSONObject("navigation") ?: return@on
                     val lists = navigation.optJSONArray("lists") ?: return@on
                     val results = mutableListOf<Track>()
+                    var playlistName: String? = null
                     for (listIdx in 0 until lists.length()) {
                         val list = lists.optJSONObject(listIdx) ?: continue
                         val items = list.optJSONArray("items") ?: continue
                         for (i in 0 until items.length()) {
                             val item = items.getJSONObject(i)
                             val type = item.optString("type", "")
-                            val title = item.optString("title", "")
-                            val artist = item.optString("artist", "")
+                            val title = item.optString("title", "Unknown Title")
+                            val artist = item.optString("artist", "Unknown Artist")
                             val uri = item.optString("uri", "")
                             val service = item.optString("service", "mpd")
                             val albumArt = item.optString("albumart", null)
                             if ((type == "song" || type == "folder-with-favourites") &&
-                                title.isNotBlank() && artist.isNotBlank() && uri.isNotBlank()
+                                uri.isNotBlank()
                             ) {
                                 results.add(Track(title, artist, uri, service, albumArt, type))
                             }
+                            // Extract playlist name from uri
+                            if (item.has("uri") && item.getString("uri").startsWith("playlists/")) {
+                                playlistName = item.getString("uri").removePrefix("playlists/")
+                            }
                         }
                     }
-                    aiSuggestions = results
-                    Log.d(TAG, "Search results: ${results.size} tracks, tracks: $results")
+                    if (playlistName != null) {
+                        playlists = playlists.map { playlist ->
+                            if (playlist.name == playlistName) {
+                                Playlist(playlist.name, results)
+                            } else {
+                                playlist
+                            }
+                        }
+                        pendingTracks[playlistName] = results.toMutableList()
+                        Log.d(TAG, "Updated tracks for $playlistName: ${results.size} tracks")
+                    } else {
+                        aiSuggestions = results
+                        Log.d(TAG, "Search results: ${results.size} tracks, tracks: $results")
+                    }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to parse pushBrowseLibrary: ${e.message}")
                 }
@@ -260,12 +277,33 @@ class PlaylistViewModel : ViewModel() {
                         return@on
                     }
                     val response = args[0] as JSONObject
+                    Log.d(TAG, "Raw pushAddToPlaylist response: $response")
                     val success = response.getBoolean("success")
                     val reason = response.optString("reason", "No reason provided")
                     if (!success) {
                         Log.e(TAG, "addToPlaylist failed: $reason")
                     } else {
                         Log.d(TAG, "addToPlaylist succeeded for track")
+                        val playlistName = response.optString("name", "")
+                        val uri = response.optString("uri", "")
+                        val title = response.optString("title", "Unknown Title")
+                        val artist = response.optString("artist", "Unknown Artist")
+                        val service = response.optString("service", "mpd")
+                        val type = response.optString("type", "song")
+                        if (playlistName.isNotBlank() && uri.isNotBlank()) {
+                            val newTrack = Track(title, artist, uri, service, null, type)
+                            playlists = playlists.map { playlist ->
+                                if (playlist.name == playlistName) {
+                                    Playlist(playlist.name, playlist.tracks + newTrack)
+                                } else {
+                                    playlist
+                                }
+                            }
+                            pendingTracks[playlistName] = (pendingTracks[playlistName] ?: mutableListOf()).apply { add(newTrack) }
+                            Log.d(TAG, "Updated playlist $playlistName with track: $title by $artist")
+                        } else {
+                            Log.w(TAG, "Invalid pushAddToPlaylist data: name=$playlistName, uri=$uri")
+                        }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to parse pushAddToPlaylist: ${e.message}")
@@ -317,6 +355,11 @@ class PlaylistViewModel : ViewModel() {
         Log.d(TAG, "Emitted listPlaylist")
     }
 
+    fun browsePlaylistTracks(playlistName: String) {
+        webSocketManager.emit("browseLibrary", JSONObject().put("uri", "playlists/$playlistName"))
+        Log.d(TAG, "Emitted browseLibrary for playlist: $playlistName")
+    }
+
     fun createPlaylist(name: String) {
         webSocketManager.emit("createPlaylist", JSONObject().put("name", name))
         Log.d(TAG, "Emitted createPlaylist: $name")
@@ -335,6 +378,24 @@ class PlaylistViewModel : ViewModel() {
         }
         webSocketManager.emit("addToPlaylist", data)
         Log.d(TAG, "Emitted addToPlaylist: $playlistName, $trackUri, service: $service")
+        // Add track locally
+        val track = aiSuggestions.find { it.uri == trackUri } ?: Track(
+            title = "Unknown Title",
+            artist = "Unknown Artist",
+            uri = trackUri,
+            service = service,
+            albumArt = null,
+            type = trackType
+        )
+        playlists = playlists.map { playlist ->
+            if (playlist.name == playlistName) {
+                Playlist(playlist.name, playlist.tracks + track)
+            } else {
+                playlist
+            }
+        }
+        pendingTracks[playlistName] = (pendingTracks[playlistName] ?: mutableListOf()).apply { add(track) }
+        Log.d(TAG, "Locally added track to $playlistName: ${track.title} by ${track.artist}")
     }
 
     fun removeFromPlaylist(playlistName: String, trackUri: String) {
@@ -344,6 +405,18 @@ class PlaylistViewModel : ViewModel() {
         }
         webSocketManager.emit("removeFromPlaylist", data)
         Log.d(TAG, "Emitted removeFromPlaylist: $playlistName, $trackUri")
+        // Update playlists
+        playlists = playlists.map { playlist ->
+            if (playlist.name == playlistName) {
+                Playlist(playlist.name, playlist.tracks.filter { it.uri != trackUri })
+            } else {
+                playlist
+            }
+        }
+        // Update pendingTracks - handle null case properly
+        pendingTracks[playlistName] = pendingTracks[playlistName]?.filter { it.uri != trackUri }?.toMutableList()
+            ?: mutableListOf()
+        Log.d(TAG, "Updated pendingTracks for $playlistName: ${pendingTracks[playlistName]?.size ?: 0} tracks")
     }
 
     fun playPlaylist(playlistName: String) {
@@ -354,6 +427,8 @@ class PlaylistViewModel : ViewModel() {
     fun deletePlaylist(playlistName: String) {
         webSocketManager.emit("deletePlaylist", JSONObject().put("name", playlistName))
         Log.d(TAG, "Emitted deletePlaylist: $playlistName")
+        playlists = playlists.filter { it.name != playlistName }
+        pendingTracks.remove(playlistName)
     }
 
     fun search(query: String) {
@@ -425,13 +500,13 @@ class PlaylistViewModel : ViewModel() {
                 val addedUris = mutableSetOf<String>()
                 val artistCounts = mutableMapOf<String, Int>()
                 val trackKeys = mutableSetOf<String>()
-                aiSuggestions = emptyList()
                 for ((artist, title) in tracks) {
                     if (addedTracks >= numSongsInt) break
                     val query = "$artist $title"
                     search(query)
                     Log.d(TAG, "Emitted search: $query")
                     val results = waitForSearchResults()
+                    Log.d(TAG, "Search results for $query: ${results.size} tracks")
                     if (results.isNotEmpty()) {
                         val track = results.firstOrNull { it.type == "song" }
                         if (track != null) {
@@ -461,8 +536,8 @@ class PlaylistViewModel : ViewModel() {
                     } else {
                         Log.w(TAG, "No search results for $artist - $title")
                     }
-                    aiSuggestions = emptyList()
                 }
+                aiSuggestions = emptyList()
                 Log.d(TAG, "Final track count: $addedTracks/$numSongsInt")
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "Created '$finalPlaylistName' with $addedTracks/$numSongsInt tracks!", Toast.LENGTH_LONG).show()
@@ -474,7 +549,6 @@ class PlaylistViewModel : ViewModel() {
                 }
             } finally {
                 isLoading = false
-                aiSuggestions = emptyList()
             }
         }
     }
@@ -583,6 +657,7 @@ class XAiApi(private val apiKey: String) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlaylistScreen(viewModel: PlaylistViewModel) {
+    val TAG = "PlaylistScreen"
     val context = LocalContext.current
     val vibeOptions = GrokConfig.VIBE_OPTIONS
     val eraOptions = GrokConfig.ERA_OPTIONS
@@ -596,6 +671,9 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
     var eraExpanded by remember { mutableStateOf(false) }
     var languageExpanded by remember { mutableStateOf(false) }
     var instrumentExpanded by remember { mutableStateOf(false) }
+    var expandedPlaylist by remember { mutableStateOf<String?>(null) }
+
+    Log.d(TAG, "PlaylistScreen initialized with vibeOptions: ${vibeOptions.joinToString()}")
 
     LaunchedEffect(Unit) {
         WebSocketManager.onConnectionChange { isConnected ->
@@ -680,11 +758,7 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
                 }
 
                 // Options Dropdown
-                AnimatedVisibility(
-                    visible = optionsExpanded,
-                    enter = slideInVertically(initialOffsetY = { -it }),
-                    exit = slideOutVertically(targetOffsetY = { -it })
-                ) {
+                if (optionsExpanded) {
                     Card(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -891,39 +965,19 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
                     items(viewModel.playlists) { playlist: Playlist ->
                         PlaylistCard(
                             playlist = playlist,
-                            onSelect = { viewModel.selectedPlaylist = playlist },
-                            onPlay = { viewModel.playPlaylist(playlist.name) },
-                            onDelete = { viewModel.deletePlaylist(playlist.name) }
-                        )
-                    }
-                }
-
-                viewModel.selectedPlaylist?.let { playlist ->
-                    Text(
-                        text = "${playlist.name} Tracks",
-                        style = MaterialTheme.typography.headlineSmall,
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(200.dp)
-                    ) {
-                        items(playlist.tracks) { track ->
-                            TrackItem(
-                                track = track,
-                                actionButtons = {
-                                    IconButton(onClick = {
-                                        viewModel.removeFromPlaylist(playlist.name, track.uri)
-                                    }) {
-                                        Icon(
-                                            painter = painterResource(id = android.R.drawable.ic_delete),
-                                            contentDescription = "Remove"
-                                        )
-                                    }
+                            isExpanded = expandedPlaylist == playlist.name,
+                            onToggle = {
+                                Log.d(TAG, "Toggling playlist: ${playlist.name}, current expanded: $expandedPlaylist")
+                                expandedPlaylist = if (expandedPlaylist == playlist.name) null else playlist.name
+                                if (expandedPlaylist == playlist.name) {
+                                    viewModel.browsePlaylistTracks(playlist.name)
                                 }
-                            )
-                        }
+                                Log.d(TAG, "New expandedPlaylist: $expandedPlaylist")
+                            },
+                            onPlay = { viewModel.playPlaylist(playlist.name) },
+                            onDelete = { viewModel.deletePlaylist(playlist.name) },
+                            onRemoveTrack = { trackUri -> viewModel.removeFromPlaylist(playlist.name, trackUri) }
+                        )
                     }
                 }
 
@@ -939,11 +993,11 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
                             .height(150.dp)
                     ) {
                         items(viewModel.aiSuggestions) { track ->
-                            TrackItem(
+                            PlaylistTrackItem(
                                 track = track,
                                 actionButtons = {
                                     IconButton(onClick = {
-                                        viewModel.selectedPlaylist?.let { playlist ->
+                                        viewModel.playlists.find { it.name == expandedPlaylist }?.let { playlist ->
                                             viewModel.addToPlaylist(playlist.name, track.uri, track.type)
                                         }
                                     }) {
@@ -965,39 +1019,93 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
 @Composable
 fun PlaylistCard(
     playlist: Playlist,
-    onSelect: () -> Unit,
+    isExpanded: Boolean,
+    onToggle: () -> Unit,
     onPlay: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onRemoveTrack: (String) -> Unit
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
-            .clickable { onSelect() }
+            .clickable { onToggle() }
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = playlist.name,
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.weight(1f)
-            )
-            IconButton(onClick = onPlay) {
-                Icon(
-                    painter = painterResource(id = android.R.drawable.ic_media_play),
-                    contentDescription = "Play"
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = playlist.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.weight(1f)
                 )
+                IconButton(onClick = onPlay) {
+                    Icon(
+                        painter = painterResource(id = android.R.drawable.ic_media_play),
+                        contentDescription = "Play"
+                    )
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(
+                        painter = painterResource(id = android.R.drawable.ic_delete),
+                        contentDescription = "Delete"
+                    )
+                }
             }
-            IconButton(onClick = onDelete) {
-                Icon(
-                    painter = painterResource(id = android.R.drawable.ic_delete),
-                    contentDescription = "Delete"
+            Log.d("PlaylistCard", "Playlist: ${playlist.name}, isExpanded: $isExpanded, tracks: ${playlist.tracks}")
+            if (isExpanded && playlist.tracks.isNotEmpty()) {
+                Text(
+                    text = "${playlist.name} Tracks",
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 200.dp)
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    items(playlist.tracks) { track ->
+                        PlaylistTrackItem(
+                            track = track,
+                            actionButtons = {
+                                IconButton(onClick = { onRemoveTrack(track.uri) }) {
+                                    Icon(
+                                        painter = painterResource(id = android.R.drawable.ic_delete),
+                                        contentDescription = "Remove"
+                                    )
+                                }
+                            }
+                        )
+                    }
+                }
             }
         }
+    }
+}
+
+@Composable
+fun PlaylistTrackItem(track: Track, actionButtons: @Composable () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = track.title,
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Text(
+                text = track.artist,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        actionButtons()
     }
 }
