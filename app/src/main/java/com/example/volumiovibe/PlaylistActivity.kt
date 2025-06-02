@@ -504,37 +504,33 @@ class PlaylistViewModel : ViewModel() {
                     if (addedTracks >= numSongsInt) break
                     val query = "$artist $title"
                     search(query)
-                    Log.d(TAG, "Emitted search: $query")
+                    Log.d(TAG, "Searchin’ for: $query")
                     val results = waitForSearchResults()
-                    Log.d(TAG, "Search results for $query: ${results.size} tracks")
-                    if (results.isNotEmpty()) {
-                        val track = results.firstOrNull { it.type == "song" }
-                        if (track != null) {
-                            val trackKey = "${track.artist}:${track.title}".lowercase()
-                            if (!trackKeys.contains(trackKey)) {
-                                val currentCount = artistCounts.getOrDefault(track.artist, 0)
-                                if (currentCount < maxSongsPerArtistInt) {
-                                    if (addedUris.add(track.uri)) {
-                                        addToPlaylist(finalPlaylistName, track.uri, track.type)
-                                        addedTracks++
-                                        artistCounts[track.artist] = currentCount + 1
-                                        trackKeys.add(trackKey)
-                                        Log.d(TAG, "Added track: ${track.title} by ${track.artist}, URI: ${track.uri}, Type: ${track.type}, Artist count: ${artistCounts[track.artist]}")
-                                        delay(500)
-                                    } else {
-                                        Log.w(TAG, "Skipped duplicate URI: ${track.uri}")
-                                    }
+                    Log.d(TAG, "Got ${results.size} results for $query: ${results.map { it.title }}")
+                    for (track in results.filter { it.type == "song" }) { // Try all valid tracks
+                        val trackKey = "${track.artist}:${track.title}".lowercase()
+                        if (!trackKeys.contains(trackKey)) {
+                            val currentCount = artistCounts.getOrDefault(track.artist, 0)
+                            if (currentCount < maxSongsPerArtistInt) {
+                                if (addedUris.add(track.uri)) {
+                                    addToPlaylist(finalPlaylistName, track.uri, track.type)
+                                    addedTracks++
+                                    artistCounts[track.artist] = currentCount + 1
+                                    trackKeys.add(trackKey)
+                                    Log.d(TAG, "Added track: ${track.title} by ${track.artist}, URI: ${track.uri}, Type: ${track.type}, Total added: $addedTracks")
+                                    break // Stop after addin’ one track for this search, move to next track
                                 } else {
-                                    Log.w(TAG, "Skipped track $title by $artist, max songs per artist ($maxSongsPerArtistInt) reached")
+                                    Log.w(TAG, "Skipped duplicate URI: ${track.uri}")
                                 }
                             } else {
-                                Log.w(TAG, "Skipped duplicate track: $title by $artist")
+                                Log.w(TAG, "Skipped track $title by $artist, max songs per artist ($maxSongsPerArtistInt) reached")
                             }
                         } else {
-                            Log.w(TAG, "No valid song track for $artist - $title")
+                            Log.w(TAG, "Skipped duplicate track: $title by $artist")
                         }
-                    } else {
-                        Log.w(TAG, "No search results for $artist - $title")
+                    }
+                    if (results.isEmpty()) {
+                        Log.w(TAG, "No results for $query, movin’ on")
                     }
                 }
                 aiSuggestions = emptyList()
