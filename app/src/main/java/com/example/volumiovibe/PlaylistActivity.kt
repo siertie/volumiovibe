@@ -502,12 +502,13 @@ class PlaylistViewModel : ViewModel() {
                 val trackKeys = mutableSetOf<String>()
                 for ((artist, title) in tracks) {
                     if (addedTracks >= numSongsInt) break
-                    val query = "$artist $title"
+                    val query = "$artist $title".replace(Regex("^\\d+\\.\\s*"), "") // Strip number prefix
+                    aiSuggestions = emptyList() // Clear before search
                     search(query)
                     Log.d(TAG, "Searchin’ for: $query")
                     val results = waitForSearchResults()
                     Log.d(TAG, "Got ${results.size} results for $query: ${results.map { it.title }}")
-                    for (track in results.filter { it.type == "song" }) { // Try all valid tracks
+                    for (track in results.filter { it.type == "song" }) {
                         val trackKey = "${track.artist}:${track.title}".lowercase()
                         if (!trackKeys.contains(trackKey)) {
                             val currentCount = artistCounts.getOrDefault(track.artist, 0)
@@ -518,7 +519,7 @@ class PlaylistViewModel : ViewModel() {
                                     artistCounts[track.artist] = currentCount + 1
                                     trackKeys.add(trackKey)
                                     Log.d(TAG, "Added track: ${track.title} by ${track.artist}, URI: ${track.uri}, Type: ${track.type}, Total added: $addedTracks")
-                                    break // Stop after addin’ one track for this search, move to next track
+                                    break
                                 } else {
                                     Log.w(TAG, "Skipped duplicate URI: ${track.uri}")
                                 }
