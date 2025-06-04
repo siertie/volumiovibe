@@ -21,7 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.painterResource
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch // Fix for Unresolved reference 'launch'
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
@@ -84,7 +84,7 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
 
     LaunchedEffect(Unit) {
         WebSocketManager.onConnectionChange { isConnected ->
-            coroutineScope.launch { // Fixed with import
+            coroutineScope.launch {
                 withContext(Dispatchers.Main) {
                     if (!isConnected) {
                         Toast.makeText(context, "WebSocket ain’t connected, fam!", Toast.LENGTH_SHORT).show()
@@ -380,37 +380,6 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
                             onDelete = { viewModel.deletePlaylist(playlist.name) },
                             onRemoveTrack = { trackUri -> viewModel.removeFromPlaylist(playlist.name, trackUri) }
                         )
-                    }
-                }
-
-                if (viewModel.aiSuggestions.isNotEmpty()) {
-                    Text(
-                        text = "AI Suggested Tracks",
-                        style = MaterialTheme.typography.headlineSmall,
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(150.dp)
-                    ) {
-                        items(viewModel.aiSuggestions) { track ->
-                            PlaylistTrackItem(
-                                track = track,
-                                actionButtons = {
-                                    IconButton(onClick = {
-                                        viewModel.playlists.firstOrNull { it.name == expandedPlaylist }?.let { playlist ->
-                                            viewModel.addToPlaylist(playlist.name, track.uri, track.type)
-                                        }
-                                    }) {
-                                        Icon(
-                                            painter = painterResource(id = android.R.drawable.ic_menu_add),
-                                            contentDescription = "Add"
-                                        )
-                                    }
-                                }
-                            )
-                        }
                     }
                 }
             }

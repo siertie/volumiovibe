@@ -10,24 +10,30 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.security.MessageDigest
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 class PlaylistViewModel(application: Application) : ViewModel() {
-    private val TAG = "VolumioCache" // Filter in Logcat with tag:VolumioCache
+    private val TAG = "VolumioCache"
     private val webSocketManager = WebSocketManager
     private val xAiApi = XAiApi(BuildConfig.XAI_API_KEY)
     private val cacheDao = AppDatabase.getDatabase(application).cacheDao()
 
     var playlists by mutableStateOf<List<Playlist>>(emptyList())
     var isLoading by mutableStateOf(false)
-    var aiSuggestions by mutableStateOf<List<Track>>(emptyList())
     private val pendingTracks = mutableMapOf<String, MutableList<Track>>()
+    private var cacheJob: Job? = null
+    private val browseRequests = ConcurrentHashMap<String, String>()
+    private var lastPlaylistStateUpdate: Long = 0
+    private var lastValidationTime: Long = 0
 
-    // Existing state properties
     private val _selectedVibe = mutableStateOf(PlaylistStateHolder.selectedVibe)
     var selectedVibe: String
         get() = _selectedVibe.value
@@ -102,59 +108,68 @@ class PlaylistViewModel(application: Application) : ViewModel() {
 
     init {
         connectWebSocket()
-        fetchAndCacheRecentPlaylists()
+        viewModelScope.launch { validateAndCachePlaylists() }
     }
 
     private fun connectWebSocket() {
         viewModelScope.launch {
             webSocketManager.initialize()
             webSocketManager.debugAllEvents()
-            webSocketManager.on("pushListPlaylist") { args: Array<Any> ->
+            webSocketManager.on("pushListPlaylist") { args: Array<out Any> ->
                 Log.d(TAG, "Got pushListPlaylist: ${args[0]}")
                 try {
-                    val data = when (args[0]) {
-                        is String -> if (args[0] == "undefined") JSONArray() else JSONArray(args[0] as String)
-                        is JSONArray -> args[0] as JSONArray
+                    val now = System.currentTimeMillis()
+                    if (now - lastPlaylistStateUpdate < 2000) {
+                        Log.d(TAG, "Debouncin’ pushListPlaylist, too soon")
+                        return@on
+                    }
+                    lastPlaylistStateUpdate = now
+                    val data: JSONArray = when (val arg = args[0]) {
+                        is String -> if (arg == "undefined") JSONArray() else JSONArray(arg)
+                        is JSONArray -> arg
                         else -> {
-                            Log.w(TAG, "Weird pushListPlaylist type: ${args[0]?.javaClass?.simpleName}")
+                            Log.w(TAG, "Weird pushListPlaylist type: ${arg?.javaClass?.simpleName}")
                             return@on
                         }
                     }
-                    val playlistNames = (0 until data.length()).mapNotNull { data.optString(it).takeIf { it != "undefined" } }
-                        .reversed() // Latest playlists are last, so reverse for newest first
+                    val playlistNames = mutableListOf<String>()
+                    for (i in 0 until data.length()) {
+                        val name = data.optString(i).trim()
+                        if (name != "undefined") {
+                            playlistNames.add(name)
+                        }
+                    }
+                    playlistNames.reverse()
                     Log.d(TAG, "Playlists (newest first): ${playlistNames.joinToString()}")
-                    val now = System.currentTimeMillis()
                     val cachedPlaylists = playlistNames.mapIndexed { index, name ->
-                        PlaylistCache(name = name, lastUpdated = now - index) // Simulate recency
+                        PlaylistCache(name = name, lastUpdated = now - index, lastFetched = 0)
                     }
                     viewModelScope.launch {
                         withContext(Dispatchers.IO) {
                             cacheDao.insertPlaylists(cachedPlaylists)
-                        }
-                    }
-                    viewModelScope.launch { // Fix for line 135
-                        withContext(Dispatchers.IO) {
-                            fetchTracksUntilLimit(playlistNames)
+                            fetchTracksUntilLimitChanged(playlistNames)
                         }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "pushListPlaylist parse failed: ${e.message}")
                 }
             }
-            webSocketManager.on("pushCreatePlaylist") { args: Array<Any> ->
+            webSocketManager.on("pushCreatePlaylist") { args: Array<out Any> ->
                 Log.d(TAG, "Got pushCreatePlaylist: ${args[0]}")
-                fetchPlaylists() // Refresh playlist list
+                fetchPlaylists()
             }
-            webSocketManager.on("pushAddToPlaylist") { args: Array<Any> ->
+            webSocketManager.on("pushAddToPlaylist") { args: Array<out Any> ->
                 Log.d(TAG, "Got pushAddToPlaylist: ${args[0]}")
                 try {
                     val response = args[0] as JSONObject
-                    val playlistName = response.optString("name", "")
+                    val playlistName = response.optString("name", "").trim()
                     if (playlistName.isNotBlank()) {
                         Log.d(TAG, "New track added to $playlistName, refreshing tracks")
                         viewModelScope.launch {
                             withContext(Dispatchers.IO) {
-                                fetchTracksForPlaylist(playlistName)
+                                val tracks = fetchTracksForPlaylist(playlistName)
+                                cacheDao.insertPlaylists(listOf(PlaylistCache(playlistName, System.currentTimeMillis(), System.currentTimeMillis(), computeTrackHash(tracks), tracks.isEmpty())))
+                                cacheDao.insertOrIgnoreTracks(tracks)
                             }
                         }
                     }
@@ -162,27 +177,28 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     Log.e(TAG, "pushAddToPlaylist parse failed: ${e.message}")
                 }
             }
-            webSocketManager.on("pushRemoveFromPlaylist") { args: Array<Any> ->
+            webSocketManager.on("pushRemoveFromPlaylist") { args: Array<out Any> ->
                 Log.d(TAG, "Got pushRemoveFromPlaylist: ${args[0]}")
                 try {
                     val response = args[0] as JSONObject
-                    val playlistName = response.optString("name", "")
+                    val playlistName = response.optString("name", "").trim()
                     val uri = response.optString("uri", "")
                     if (playlistName.isNotBlank() && uri.isNotBlank()) {
-                        Log.d(TAG, "Track $uri removed from $playlistName, updating cache")
+                        Log.d(TAG, "Track $uri removed from $playlistName, updakin’ cache")
                         viewModelScope.launch {
                             withContext(Dispatchers.IO) {
-                                cacheDao.clearTracksForPlaylist(playlistName)
-                                fetchTracksForPlaylist(playlistName)
+                                val tracks = fetchTracksForPlaylist(playlistName)
+                                cacheDao.insertPlaylists(listOf(PlaylistCache(playlistName, System.currentTimeMillis(), System.currentTimeMillis(), computeTrackHash(tracks), tracks.isEmpty())))
+                                cacheDao.insertOrIgnoreTracks(tracks)
                             }
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "pushRemoveFromPlaylist parse failed: ${e.message}")
+                    Log.e(TAG, "pushRemoveFromPlaylist failed: ${e.message}")
                 }
             }
-            webSocketManager.on("pushBrowseLibrary") { args: Array<Any> ->
-                Log.d(TAG, "Received pushBrowseLibrary: ${args[0]}")
+            webSocketManager.on("pushBrowseLibrary") { args: Array<out Any> ->
+                Log.d(TAG, "Received pushBrowseLibrary: ${args[0]} at ${System.currentTimeMillis()}")
                 try {
                     val data = when (val arg = args[0]) {
                         is String -> {
@@ -190,11 +206,11 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                                 Log.w(TAG, "Invalid pushBrowseLibrary response: $arg")
                                 return@on
                             }
-                            JSONObject(arg)
+                            JSONObject(arg.toString())
                         }
                         is JSONObject -> arg
                         else -> {
-                            Log.w(TAG, "Unexpected pushBrowseLibrary arg type: ${arg?.javaClass?.simpleName}")
+                            Log.w(TAG, "Unexpected pushBrowseLibrary type: ${arg?.javaClass?.simpleName}")
                             return@on
                         }
                     }
@@ -202,6 +218,16 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     val lists = navigation.optJSONArray("lists") ?: return@on
                     val results = mutableListOf<Track>()
                     var playlistName: String? = null
+
+                    // Extract playlist name from "info" section for playlist responses
+                    val info = navigation.optJSONObject("info")
+                    val type = info?.optString("type")
+                    val title = info?.optString("title")?.trim()
+                    if (type == "play-playlist" && title != null && title.isNotBlank()) {
+                        playlistName = title
+                    }
+
+                    // Process track items
                     for (listIdx in 0 until lists.length()) {
                         val list = lists.optJSONObject(listIdx) ?: continue
                         val items = list.optJSONArray("items") ?: continue
@@ -212,23 +238,34 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                             val artist = item.optString("artist", "Unknown Artist")
                             val uri = item.optString("uri", "")
                             val service = item.optString("service", "mpd")
-                            val albumArt = item.optString("albumart", null)
+                            val albumArt = item.optString("albumart")
                             if ((type == "song" || type == "folder-with-favourites") && uri.isNotBlank()) {
                                 results.add(Track(title, artist, uri, service, albumArt, type))
                             }
-                            if (item.has("uri") && item.getString("uri").startsWith("playlists/")) {
-                                playlistName = item.getString("uri").removePrefix("playlists/")
-                            }
                         }
                     }
+
+                    // Handle playlist response
                     if (playlistName != null) {
-                        playlists = playlists.map { playlist ->
-                            if (playlist.name == playlistName) Playlist(playlist.name, results) else playlist
+                        synchronized(browseRequests) {
+                            val requestId = browseRequests.entries.find { it.value == playlistName }?.key
+                            if (requestId != null) {
+                                playlists = playlists.map { playlist ->
+                                    if (playlist.name == playlistName) Playlist(playlist.name, results) else playlist
+                                }
+                                pendingTracks[playlistName] = results.toMutableList()
+                                browseRequests["$requestId:results"] = results.map { "${it.title},${it.artist},${it.uri},${it.service},${it.albumArt ?: ""},${it.type}" }.joinToString("|")
+                                Log.d(TAG, "Updated tracks for $playlistName: ${results.size} tracks")
+                                browseRequests.remove(requestId)
+                            } else {
+                                Log.w(TAG, "No request found for $playlistName, ignoring response")
+                            }
                         }
-                        pendingTracks[playlistName] = results.toMutableList()
-                        Log.d(TAG, "Updated tracks for $playlistName: ${results.size} tracks")
                     } else {
-                        aiSuggestions = results
+                        // Handle non-playlist (e.g., search) responses
+                        synchronized(browseRequests) {
+                            browseRequests["search:results"] = results.map { "${it.title},${it.artist},${it.uri},${it.service},${it.albumArt ?: ""},${it.type}" }.joinToString("|")
+                        }
                         Log.d(TAG, "Search results: ${results.size} tracks")
                     }
                 } catch (e: Exception) {
@@ -238,54 +275,219 @@ class PlaylistViewModel(application: Application) : ViewModel() {
         }
     }
 
+    private fun computeTrackHash(tracks: List<TrackCache>): Int {
+        val sortedUris = tracks.map { it.uri }.sorted().joinToString("")
+        val digest = MessageDigest.getInstance("SHA-256")
+        val hashBytes = digest.digest(sortedUris.toByteArray())
+        return hashBytes.fold(0) { acc, byte -> (acc shl 8) + (byte.toInt() and 0xFF) }
+    }
+
     fun fetchPlaylists() {
         Log.d(TAG, "Emittin’ listPlaylist")
         webSocketManager.emit("listPlaylist", JSONObject())
     }
 
-    private suspend fun fetchTracksUntilLimit(playlistNames: List<String>) {
-        Log.d(TAG, "Fetchin’ tracks until we hit 200 unique ones")
-        val allTracks = mutableListOf<TrackCache>()
-        for (playlistName in playlistNames) {
-            if (allTracks.size >= 200) {
-                Log.d(TAG, "Hit 200 tracks, stoppin’ fetch")
-                break
+    private suspend fun validateAndCachePlaylists() {
+        isLoading = true
+        try {
+            val startTime = System.currentTimeMillis()
+            val cachedPlaylists = withContext(Dispatchers.IO) { cacheDao.getPlaylists() }
+            val allCachedTracks = withContext(Dispatchers.IO) { cacheDao.getRecentTracks() }
+            Log.d(TAG, "Validatin’ cache: ${cachedPlaylists.size} playlists, ${allCachedTracks.size} tracks, took ${System.currentTimeMillis() - startTime}ms")
+            val now = System.currentTimeMillis()
+            val cacheTTL = 24 * 60 * 60 * 1000 // 24 hours
+            var needsRefresh = false
+            for (playlist in cachedPlaylists) {
+                val trimmedPlaylistName = playlist.name.trim()
+                val cacheStart = System.currentTimeMillis()
+                val cachedTracks = withContext(Dispatchers.IO) { cacheDao.getTracksForPlaylist(trimmedPlaylistName) }
+                Log.d(TAG, "Retrieved ${cachedTracks.size} cached tracks for playlist '$trimmedPlaylistName' in ${System.currentTimeMillis() - cacheStart}ms")
+                val storedHash = withContext(Dispatchers.IO) { cacheDao.getPlaylistHash(trimmedPlaylistName) }
+                val currentHash = computeTrackHash(cachedTracks)
+                if (playlist.lastFetched == 0L || now - playlist.lastFetched > cacheTTL) {
+                    Log.w(TAG, "Cache stale for $trimmedPlaylistName: tracks=${cachedTracks.size}, lastFetched=${playlist.lastFetched}, hash=$currentHash vs $storedHash")
+                    needsRefresh = true
+                    withContext(Dispatchers.IO) {
+                        val tracks = fetchTracksForPlaylist(trimmedPlaylistName)
+                        cacheDao.insertPlaylists(listOf(PlaylistCache(trimmedPlaylistName, now, now, computeTrackHash(tracks), tracks.isEmpty())))
+                        try {
+                            cacheDao.insertOrIgnoreTracks(tracks)
+                            val insertedTracks = cacheDao.getTracksForPlaylist(trimmedPlaylistName)
+                            Log.d(TAG, "After insertion, retrieved ${insertedTracks.size} tracks for '$trimmedPlaylistName'")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to insert tracks for '$trimmedPlaylistName': ${e.message}")
+                        }
+                        Log.d(TAG, "Updated cache for $trimmedPlaylistName: ${tracks.size} tracks")
+                    }
+                } else if (playlist.isEmpty || cachedTracks.isNotEmpty()) {
+                    Log.d(TAG, "Usin’ cached tracks for $trimmedPlaylistName: ${if (playlist.isEmpty) "empty" else "${cachedTracks.size} tracks"}")
+                } else {
+                    Log.w(TAG, "No tracks in cache for $trimmedPlaylistName, fetching")
+                    needsRefresh = true
+                    withContext(Dispatchers.IO) {
+                        val tracks = fetchTracksForPlaylist(trimmedPlaylistName)
+                        cacheDao.insertPlaylists(listOf(PlaylistCache(trimmedPlaylistName, now, now, computeTrackHash(tracks), tracks.isEmpty())))
+                        try {
+                            cacheDao.insertOrIgnoreTracks(tracks)
+                            val insertedTracks = cacheDao.getTracksForPlaylist(trimmedPlaylistName)
+                            Log.d(TAG, "After insertion, retrieved ${insertedTracks.size} tracks for '$trimmedPlaylistName'")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to insert tracks for '$trimmedPlaylistName': ${e.message}")
+                        }
+                    }
+                }
             }
-            val tracks = withContext(Dispatchers.IO) { fetchTracksForPlaylist(playlistName) }
-            allTracks.addAll(tracks.filter { newTrack ->
-                allTracks.none { it.uri == newTrack.uri } // Ensure no dupes
-            })
-            Log.d(TAG, "After $playlistName, got ${allTracks.size}/200 tracks")
+            lastValidationTime = now
+            fetchPlaylists()
+            if (cachedPlaylists.isNotEmpty() && needsRefresh && now - lastPlaylistStateUpdate > 2000) {
+                withContext(Dispatchers.IO) {
+                    fetchTracksUntilLimitChanged(cachedPlaylists.map { it.name.trim() }.reversed())
+                }
+            }
+            // Log all cached tracks for debugging
+            val allTracksStart = System.currentTimeMillis()
+            val allTracks = withContext(Dispatchers.IO) { cacheDao.getRecentTracks() }
+            Log.d(TAG, "All cached tracks: ${allTracks.map { "${it.playlistName}: ${it.artist} - ${it.title}" }}, took ${System.currentTimeMillis() - allTracksStart}ms")
+        } catch (e: Exception) {
+            Log.e(TAG, "Cache validation failed: ${e.message}")
+        } finally {
+            isLoading = false
         }
-        withContext(Dispatchers.IO) {
-            cacheDao.clearAllTracks()
-            cacheDao.insertTracks(allTracks.take(200))
+    }
+
+    private suspend fun fetchTracksUntilLimitChanged(playlistNames: List<String>) {
+        cacheJob?.cancel()
+        cacheJob = viewModelScope.launch {
+            try {
+                Log.d(TAG, "Checkin’ cache before fetchin’ tracks")
+                val allTracks = mutableListOf<TrackCache>()
+                val uniqueUris = hashSetOf<String>()
+                val now = System.currentTimeMillis()
+                val cacheTTL = 24 * 60 * 60 * 1000
+                val allCachedTracksStart = System.currentTimeMillis()
+                val allCachedTracks = withContext(Dispatchers.IO) { cacheDao.getRecentTracks() }
+                Log.d(TAG, "Current track_cache: ${allCachedTracks.size} tracks: ${allCachedTracks.map { "${it.playlistName}: ${it.artist} - ${it.title}" }}, took ${System.currentTimeMillis() - allCachedTracksStart}ms")
+                for (playlistName in playlistNames.map { it.trim() }) {
+                    if (allTracks.size >= 200) {
+                        Log.d(TAG, "Hit 200 tracks, stoppin’")
+                        break
+                    }
+                    val cachedPlaylist = withContext(Dispatchers.IO) {
+                        cacheDao.getPlaylists().find { it.name.trim() == playlistName }
+                    }
+                    val cacheStart = System.currentTimeMillis()
+                    val cachedTracks = withContext(Dispatchers.IO) {
+                        cacheDao.getTracksForPlaylist(playlistName)
+                    }
+                    Log.d(TAG, "Retrieved ${cachedTracks.size} cached tracks for playlist '$playlistName' in ${System.currentTimeMillis() - cacheStart}ms")
+                    val currentHash = computeTrackHash(cachedTracks)
+                    val storedHash = withContext(Dispatchers.IO) { cacheDao.getPlaylistHash(playlistName) }
+                    val tracks = if (cachedPlaylist != null && (now - cachedPlaylist.lastFetched < cacheTTL) && (cachedPlaylist.isEmpty || cachedTracks.isNotEmpty())) {
+                        Log.d(TAG, "Usin’ cached tracks for $playlistName: ${if (cachedPlaylist.isEmpty) "empty" else "${cachedTracks.size} tracks"}")
+                        cachedTracks
+                    } else {
+                        Log.d(TAG, "Fetchin’ tracks for $playlistName: tracks=${cachedTracks.size}, lastFetched=${cachedPlaylist?.lastFetched}, hash=$currentHash vs $storedHash")
+                        withContext(Dispatchers.IO) {
+                            val tracks = fetchTracksForPlaylist(playlistName)
+                            cacheDao.insertPlaylists(listOf(PlaylistCache(playlistName, now, now, computeTrackHash(tracks), tracks.isEmpty())))
+                            try {
+                                cacheDao.insertOrIgnoreTracks(tracks)
+                                val insertedTracks = cacheDao.getTracksForPlaylist(playlistName)
+                                Log.d(TAG, "After insertion, retrieved ${insertedTracks.size} tracks for '$playlistName'")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to insert tracks for '$playlistName': ${e.message}")
+                            }
+                            Log.d(TAG, "Updated cache for $playlistName: ${tracks.size} tracks")
+                            tracks
+                        }
+                    }
+                    allTracks.addAll(tracks.filter { newTrack ->
+                        uniqueUris.add(newTrack.uri)
+                    })
+                    Log.d(TAG, "After $playlistName, got ${allTracks.size}/200 tracks, unique URIs: ${uniqueUris.size}")
+                }
+                withContext(Dispatchers.IO) {
+                    try {
+                        cacheDao.insertOrIgnoreTracks(allTracks.take(200))
+                        Log.d(TAG, "Successfully cached ${allTracks.size}/200 tracks")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to cache tracks: ${e.message}")
+                    }
+                }
+                Log.d(TAG, "Cached ${allTracks.size}/200 tracks: ${allTracks.map { "${it.artist} - ${it.title}" }}")
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                Log.d(TAG, "Cache job cancelled normally")
+            }
         }
-        Log.d(TAG, "Cached ${allTracks.size}/200 tracks: ${allTracks.map { "${it.artist} - ${it.title}" }}")
     }
 
     private suspend fun fetchTracksForPlaylist(playlistName: String): List<TrackCache> {
-        Log.d(TAG, "Fetchin’ tracks for playlist: $playlistName")
-        aiSuggestions = emptyList() // Clear before new fetch
-        webSocketManager.emit("browseLibrary", JSONObject().put("uri", "playlists/$playlistName"))
-        val startTime = System.currentTimeMillis()
-        while (aiSuggestions.isEmpty() && System.currentTimeMillis() - startTime < 5000) {
-            delay(100)
+        val trimmedPlaylistName = playlistName.trim()
+        Log.d(TAG, "Fetchin’ tracks for playlist: $trimmedPlaylistName")
+        val requestId = UUID.randomUUID().toString()
+        synchronized(browseRequests) {
+            browseRequests[requestId] = trimmedPlaylistName
         }
-        val tracks = aiSuggestions.mapNotNull { track ->
-            if (track.type == "song" && track.uri.isNotBlank()) {
-                TrackCache(
-                    uri = track.uri,
-                    title = track.title,
-                    artist = track.artist,
-                    playlistName = playlistName,
-                    service = track.service,
-                    type = track.type,
-                    lastUpdated = System.currentTimeMillis()
-                )
-            } else null
-        }.distinctBy { it.uri }
-        Log.d(TAG, "Got ${tracks.size} unique tracks for $playlistName: ${tracks.map { "${it.artist} - ${it.title}" }}")
+        var tracks = listOf<TrackCache>()
+        var attempt = 0
+        val maxRetries = 1
+        val baseDelay = 200L
+        val fetchStart = System.currentTimeMillis()
+        while (attempt < maxRetries) {
+            attempt++
+            webSocketManager.emit("browseLibrary", JSONObject().put("uri", "playlists/$trimmedPlaylistName"))
+            val timeout = 2000L
+            val startTime = System.currentTimeMillis()
+            var shouldContinue = true
+            while (System.currentTimeMillis() - startTime < timeout && shouldContinue) {
+                synchronized(browseRequests) {
+                    val resultKey = "$requestId:results"
+                    if (browseRequests.containsKey(resultKey)) {
+                        val results = browseRequests[resultKey]!!.split("|").mapNotNull {
+                            val parts = it.split(",")
+                            if (parts.size >= 6) Track(parts[0], parts[1], parts[2], parts[3], parts[4].takeIf { it.isNotEmpty() }, parts[5]) else null
+                        }
+                        tracks = results.map { track ->
+                            TrackCache(
+                                uri = track.uri,
+                                title = track.title,
+                                artist = track.artist,
+                                playlistName = trimmedPlaylistName,
+                                service = track.service,
+                                albumArt = track.albumArt,
+                                type = track.type,
+                                lastUpdated = System.currentTimeMillis()
+                            )
+                        }.distinctBy { "${it.uri}:${it.playlistName}" }
+                        browseRequests.remove(resultKey)
+                        shouldContinue = false
+                    }
+                }
+                delay(50)
+            }
+            synchronized(browseRequests) {
+                browseRequests.entries.removeIf { it.value == trimmedPlaylistName }
+            }
+            if (tracks.isNotEmpty() || shouldContinue == false) break
+            if (System.currentTimeMillis() - startTime >= timeout) {
+                Log.w(TAG, "Timeout fetching tracks for $trimmedPlaylistName, attempt $attempt/$maxRetries")
+                if (attempt < maxRetries) delay(baseDelay shl attempt)
+            }
+        }
+        if (tracks.isEmpty()) {
+            Log.e(TAG, "Failed to fetch tracks for $trimmedPlaylistName after $maxRetries attempts")
+        }
+        Log.d(TAG, "Got ${tracks.size} unique tracks for $trimmedPlaylistName: ${tracks.map { "${it.artist} - ${it.title}" }}, took ${System.currentTimeMillis() - fetchStart}ms")
+        withContext(Dispatchers.IO) {
+            cacheDao.insertPlaylists(listOf(PlaylistCache(trimmedPlaylistName, System.currentTimeMillis(), System.currentTimeMillis(), computeTrackHash(tracks), tracks.isEmpty())))
+            try {
+                cacheDao.insertOrIgnoreTracks(tracks)
+                val insertedTracks = cacheDao.getTracksForPlaylist(trimmedPlaylistName)
+                Log.d(TAG, "After insertion, retrieved ${insertedTracks.size} tracks for '$trimmedPlaylistName'")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to insert tracks for '$trimmedPlaylistName': ${e.message}")
+            }
+        }
         return tracks
     }
 
@@ -294,13 +496,6 @@ class PlaylistViewModel(application: Application) : ViewModel() {
             isLoading = true
             try {
                 fetchPlaylists()
-                val cachedPlaylists = withContext(Dispatchers.IO) { cacheDao.getPlaylists() }
-                Log.d(TAG, "Cached playlists: ${cachedPlaylists.map { it.name }}")
-                if (cachedPlaylists.isEmpty()) {
-                    Log.d(TAG, "No cached playlists, waitin’ for pushListPlaylist")
-                } else {
-                    fetchTracksUntilLimit(cachedPlaylists.map { it.name }.reversed()) // Newest first
-                }
             } catch (e: Exception) {
                 Log.e(TAG, "Fetch and cache failed: ${e.message}")
             } finally {
@@ -310,36 +505,39 @@ class PlaylistViewModel(application: Application) : ViewModel() {
     }
 
     suspend fun getCachedTrackUris(): List<String> {
+        val startTime = System.currentTimeMillis()
         val tracks = withContext(Dispatchers.IO) { cacheDao.getRecentTracks() }
-        Log.d(TAG, "Sendin’ ${tracks.size} cached track URIs to Grok")
-        return tracks.map { it.uri }
+        Log.d(TAG, "Sendin’ ${tracks.size} cached track URIs to Grok, took ${System.currentTimeMillis() - startTime}ms")
+        return tracks.map { it.uri }.distinct()
     }
 
-    // Existing methods (unchanged)
     fun browsePlaylistTracks(playlistName: String) {
-        webSocketManager.emit("browseLibrary", JSONObject().put("uri", "playlists/$playlistName"))
-        Log.d(TAG, "Emitted browseLibrary for playlist: $playlistName")
+        val trimmedPlaylistName = playlistName.trim()
+        webSocketManager.emit("browseLibrary", JSONObject().put("uri", "playlists/$trimmedPlaylistName"))
+        Log.d(TAG, "Emitted browseLibrary for playlist: $trimmedPlaylistName")
     }
 
     fun createPlaylist(name: String) {
-        webSocketManager.emit("createPlaylist", JSONObject().put("name", name))
-        Log.d(TAG, "Emitted createPlaylist: $name")
+        val trimmedName = name.trim()
+        webSocketManager.emit("createPlaylist", JSONObject().put("name", trimmedName))
+        Log.d(TAG, "Emitted createPlaylist: $trimmedName")
     }
 
     fun addToPlaylist(playlistName: String, trackUri: String, trackType: String) {
+        val trimmedPlaylistName = playlistName.trim()
         val service = when {
             trackUri.startsWith("tidal://") -> "tidal"
             trackType == "folder-with-favourites" -> "tidal"
             else -> "mpd"
         }
         val data = JSONObject().apply {
-            put("name", playlistName)
+            put("name", trimmedPlaylistName)
             put("service", service)
             put("uri", trackUri)
         }
         webSocketManager.emit("addToPlaylist", data)
-        Log.d(TAG, "Emitted addToPlaylist: $playlistName, $trackUri, service: $service")
-        val track = aiSuggestions.find { it.uri == trackUri } ?: Track(
+        Log.d(TAG, "Emitted addToPlaylist: $trimmedPlaylistName, $trackUri, service=$service")
+        val track = Track(
             title = "Unknown Title",
             artist = "Unknown Artist",
             uri = trackUri,
@@ -348,36 +546,39 @@ class PlaylistViewModel(application: Application) : ViewModel() {
             type = trackType
         )
         playlists = playlists.map { playlist ->
-            if (playlist.name == playlistName) Playlist(playlist.name, playlist.tracks + track) else playlist
+            if (playlist.name == trimmedPlaylistName) Playlist(playlist.name, playlist.tracks + track) else playlist
         }
-        pendingTracks[playlistName] = (pendingTracks[playlistName] ?: mutableListOf()).apply { add(track) }
-        Log.d(TAG, "Locally added track to $playlistName: ${track.title} by ${track.artist}")
+        pendingTracks[trimmedPlaylistName] = (pendingTracks[trimmedPlaylistName] ?: mutableListOf()).apply { add(track) }
+        Log.d(TAG, "Locally added track to $trimmedPlaylistName: ${track.title} by ${track.artist}")
     }
 
     fun removeFromPlaylist(playlistName: String, trackUri: String) {
+        val trimmedPlaylistName = playlistName.trim()
         val data = JSONObject().apply {
-            put("name", playlistName)
+            put("name", trimmedPlaylistName)
             put("uri", trackUri)
         }
         webSocketManager.emit("removeFromPlaylist", data)
-        Log.d(TAG, "Emitted removeFromPlaylist: $playlistName, $trackUri")
+        Log.d(TAG, "Emitted removeFromPlaylist: $trimmedPlaylistName, $trackUri")
         playlists = playlists.map { playlist ->
-            if (playlist.name == playlistName) Playlist(playlist.name, playlist.tracks.filter { it.uri != trackUri }) else playlist
+            if (playlist.name == trimmedPlaylistName) Playlist(playlist.name, playlist.tracks.filter { it.uri != trackUri }) else playlist
         }
-        pendingTracks[playlistName] = pendingTracks[playlistName]?.filter { it.uri != trackUri }?.toMutableList() ?: mutableListOf()
-        Log.d(TAG, "Updated pendingTracks for $playlistName: ${pendingTracks[playlistName]?.size ?: 0} tracks")
+        pendingTracks[trimmedPlaylistName] = pendingTracks[trimmedPlaylistName]?.filter { it.uri != trackUri }?.toMutableList() ?: mutableListOf()
+        Log.d(TAG, "Updated pendingTracks for $trimmedPlaylistName: ${pendingTracks[trimmedPlaylistName]?.size ?: 0} tracks")
     }
 
     fun playPlaylist(playlistName: String) {
-        webSocketManager.emit("playPlaylist", JSONObject().put("name", playlistName))
-        Log.d(TAG, "Emitted playPlaylist: $playlistName")
+        val trimmedPlaylistName = playlistName.trim()
+        webSocketManager.emit("playPlaylist", JSONObject().put("name", trimmedPlaylistName))
+        Log.d(TAG, "Emitted playPlaylist: $trimmedPlaylistName")
     }
 
     fun deletePlaylist(playlistName: String) {
-        webSocketManager.emit("deletePlaylist", JSONObject().put("name", playlistName))
-        Log.d(TAG, "Emitted deletePlaylist: $playlistName")
-        playlists = playlists.filter { it.name != playlistName }
-        pendingTracks.remove(playlistName)
+        val trimmedPlaylistName = playlistName.trim()
+        webSocketManager.emit("deletePlaylist", JSONObject().put("name", trimmedPlaylistName))
+        Log.d(TAG, "Emitted deletePlaylist: $trimmedPlaylistName")
+        playlists = playlists.filter { it.name != trimmedPlaylistName }
+        pendingTracks.remove(trimmedPlaylistName)
     }
 
     fun search(query: String) {
@@ -385,12 +586,22 @@ class PlaylistViewModel(application: Application) : ViewModel() {
         Log.d(TAG, "Emitted search: $query")
     }
 
-    suspend fun waitForSearchResults(timeoutMs: Long = 5000): List<Track> {
+    suspend fun waitForSearchResults(timeoutMs: Long = 10000): List<Track> {
         val startTime = System.currentTimeMillis()
-        while (aiSuggestions.isEmpty() && System.currentTimeMillis() - startTime < timeoutMs) {
+        while (System.currentTimeMillis() - startTime < timeoutMs) {
+            synchronized(browseRequests) {
+                if (browseRequests.containsKey("search:results")) {
+                    val results = browseRequests["search:results"]!!.split("|").mapNotNull {
+                        val parts = it.split(",")
+                        if (parts.size >= 6) Track(parts[0], parts[1], parts[2], parts[3], parts[4].takeIf { it.isNotEmpty() }, parts[5]) else null
+                    }
+                    browseRequests.remove("search:results")
+                    return results
+                }
+            }
             delay(100)
         }
-        return aiSuggestions
+        return emptyList()
     }
 
     fun generateAiPlaylist(context: Context) {
@@ -411,7 +622,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                         language = language.takeIf { it != GrokConfig.LANGUAGE_OPTIONS.first() }
                     )
                 } else {
-                    playlistName
+                    playlistName.trim()
                 }
                 createPlaylist(finalPlaylistName)
                 delay(1000)
@@ -429,6 +640,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
 
                 val numSongsInt = numSongs.toIntOrNull() ?: GrokConfig.DEFAULT_NUM_SONGS.toInt()
                 val maxSongsPerArtistInt = if (numSongsInt < 10) 1 else maxSongsPerArtist.toIntOrNull() ?: GrokConfig.DEFAULT_MAX_SONGS_PER_ARTIST.toInt()
+                val excludedUris = getCachedTrackUris()
                 val songList = xAiApi.generateSongList(
                     vibe = vibe,
                     numSongs = numSongsInt,
@@ -436,7 +648,8 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     era = era.takeIf { it != GrokConfig.ERA_OPTIONS.first() },
                     maxSongsPerArtist = maxSongsPerArtistInt,
                     instrument = instrument.takeIf { it != GrokConfig.INSTRUMENT_OPTIONS.first() },
-                    language = language.takeIf { it != GrokConfig.LANGUAGE_OPTIONS.first() }
+                    language = language.takeIf { it != GrokConfig.LANGUAGE_OPTIONS.first() },
+                    excludedUris = excludedUris
                 ) ?: throw Exception("No songs from xAI API")
 
                 val tracks = songList.split("\n").mapNotNull { line ->
@@ -452,7 +665,6 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                 for ((artist, title) in tracks) {
                     if (addedTracks >= numSongsInt) break
                     val query = "$artist $title".replace(Regex("^\\d+\\.\\s*"), "")
-                    aiSuggestions = emptyList()
                     search(query)
                     Log.d(TAG, "Searchin’ for: $query")
                     val results = waitForSearchResults()
@@ -467,13 +679,13 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                                     addedTracks++
                                     artistCounts[track.artist] = currentCount + 1
                                     trackKeys.add(trackKey)
-                                    Log.d(TAG, "Added track: ${track.title} by ${track.artist}, URI: ${track.uri}, Type: ${track.type}, Total added: $addedTracks")
+                                    Log.d(TAG, "Added track: ${track.title} by ${track.artist}, URI: ${track.uri}, total added=$addedTracks")
                                     break
                                 } else {
                                     Log.w(TAG, "Skipped duplicate URI: ${track.uri}")
                                 }
                             } else {
-                                Log.w(TAG, "Skipped track $title by $artist, max songs per artist ($maxSongsPerArtistInt) reached")
+                                Log.w(TAG, "Skipped track: $title by $artist, max songs per artist ($maxSongsPerArtistInt) reached")
                             }
                         } else {
                             Log.w(TAG, "Skipped duplicate track: $title by $artist")
@@ -483,7 +695,6 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                         Log.w(TAG, "No results for $query, movin’ on")
                     }
                 }
-                aiSuggestions = emptyList()
                 Log.d(TAG, "Final track count: $addedTracks/$numSongsInt")
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "Created '$finalPlaylistName' with $addedTracks/$numSongsInt tracks!", Toast.LENGTH_LONG).show()
