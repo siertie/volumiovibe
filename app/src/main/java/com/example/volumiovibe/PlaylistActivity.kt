@@ -27,6 +27,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
+import com.example.volumiovibe.ui.theme.AppTheme
+import com.example.volumiovibe.ui.theme.ThemeMode
 
 // Playlist data class (kept in case it’s not defined elsewhere)
 data class Playlist(val name: String, val tracks: List<Track>)
@@ -50,14 +52,13 @@ class PlaylistActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            val dynamicColor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                val context = LocalContext.current
-                if (isSystemInDarkTheme()) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-            } else {
-                MaterialTheme.colorScheme
-            }
-            MaterialTheme(colorScheme = dynamicColor) {
-                PlaylistScreen(viewModel = viewModel { PlaylistViewModel(application) })
+            var themeMode by remember { mutableStateOf(ThemeMode.SYSTEM) }
+            AppTheme(themeMode = themeMode) {
+                PlaylistScreen(
+                    viewModel = viewModel { PlaylistViewModel(application) },
+                    themeMode = themeMode,
+                    onThemeModeChange = { newMode -> themeMode = newMode }
+                )
             }
         }
     }
@@ -65,7 +66,11 @@ class PlaylistActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PlaylistScreen(viewModel: PlaylistViewModel) {
+fun PlaylistScreen(
+    viewModel: PlaylistViewModel,
+    themeMode: ThemeMode,
+    onThemeModeChange: (ThemeMode) -> Unit
+) {
     val TAG = "PlaylistScreen"
     val context = LocalContext.current
     val vibeOptions = GrokConfig.VIBE_OPTIONS
@@ -104,6 +109,28 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
         topBar = {
             TopAppBar(
                 title = { Text("Playlist Vibe", textAlign = TextAlign.Center) },
+                actions = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = if (themeMode == ThemeMode.DARK) "Dark" else "Light",
+                            color = MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Switch(
+                            checked = themeMode == ThemeMode.DARK,
+                            onCheckedChange = {
+                                onThemeModeChange(if (it) ThemeMode.DARK else ThemeMode.LIGHT)
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = MaterialTheme.colorScheme.primary,
+                                checkedTrackColor = MaterialTheme.colorScheme.primaryContainer,
+                                uncheckedThumbColor = MaterialTheme.colorScheme.onSurface,
+                                uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                            )
+                        )
+                    }
+                },
                 modifier = Modifier.fillMaxWidth()
             )
         },
@@ -334,12 +361,16 @@ fun PlaylistScreen(viewModel: PlaylistViewModel) {
                     }
                 }
 
-                FilledTonalButton(
+                Button(
                     onClick = { viewModel.generateAiPlaylist(context) },
                     enabled = !viewModel.isLoading,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 16.dp)
+                        .padding(bottom = 16.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondary,
+                        contentColor = MaterialTheme.colorScheme.onSecondary
+                    )
                 ) {
                     Text("Make That Playlist, Fam!")
                 }
