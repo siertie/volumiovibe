@@ -473,17 +473,38 @@ class PlaylistViewModel(application: Application) : ViewModel() {
         return emptyList()
     }
 
-    // Fuzzy match for title and artist
     private fun isTrackMatch(requestedTitle: String, requestedArtist: String, trackTitle: String, trackArtist: String): Boolean {
-        val cleanRequestedTitle = requestedTitle.lowercase().replace(Regex("[^a-z0-9 ]"), "")
-        val cleanTrackTitle = trackTitle.lowercase().replace(Regex("[^a-z0-9 ]"), "")
-        val cleanRequestedArtist = requestedArtist.lowercase().replace(Regex("[^a-z0-9 ]"), "")
-        val cleanTrackArtist = trackArtist.lowercase().replace(Regex("[^a-z0-9 ]"), "")
+        // Enhanced cleaning: lowercase, remove non-alphanumeric except spaces, normalize spaces, trim
+        val cleanRequestedTitle = requestedTitle.lowercase()
+            .replace(Regex("[^a-z0-9 ]"), "")
+            .replace(Regex(" +"), " ")
+            .trim()
+        val cleanTrackTitle = trackTitle.lowercase()
+            .replace(Regex("[^a-z0-9 ]"), "")
+            .replace(Regex(" +"), " ")
+            .trim()
+        val cleanRequestedArtist = requestedArtist.lowercase()
+            .replace(Regex("[^a-z0-9 ]"), "")
+            .replace(Regex(" +"), " ")
+            .trim()
+        val cleanTrackArtist = trackArtist.lowercase()
+            .replace(Regex("[^a-z0-9 ]"), "")
+            .replace(Regex(" +"), " ")
+            .trim()
 
-        val titleMatch = cleanTrackTitle.contains(cleanRequestedTitle) || cleanRequestedTitle.contains(cleanTrackTitle)
-        val artistMatch = cleanTrackArtist.contains(cleanRequestedArtist) || cleanRequestedArtist.contains(cleanTrackArtist)
+        // Check if one title contains the other
+        val titleMatch = cleanTrackTitle.contains(cleanRequestedTitle) ||
+                cleanRequestedTitle.contains(cleanTrackTitle)
 
-        return titleMatch && artistMatch
+        // Check if the requested artist is in the track title
+        val artistInTitle = cleanTrackTitle.contains(cleanRequestedArtist)
+
+        // Check if one artist contains the other
+        val artistMatch = cleanTrackArtist.contains(cleanRequestedArtist) ||
+                cleanRequestedArtist.contains(cleanTrackArtist)
+
+        // Match if title matches and either artist matches or artist is in the title
+        return titleMatch && (artistMatch || artistInTitle)
     }
 
     fun generateAiPlaylist(context: Context) {
@@ -525,22 +546,21 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     webSocketManager.reconnect()
                     delay(2000)
                     if (!webSocketManager.isConnected()) {
-                        Log.e("EXCLUDED_SONGS_DEBUG", "WebSocket still disconnected, proceedin’ with empty excluded URIs")
+                        Log.e("EXCLUDED_SONGS_DEBUG", "WebSocket still disconnected, proceedin’ with empty excluded songs")
                     }
                 }
 
                 fetchAllPlaylistTracks()
 
-                Log.d("EXCLUDED_SONGS_DEBUG", "Playlists state before excludedUris: ${playlists.map { it.name to it.tracks.size }}")
+                Log.d("EXCLUDED_SONGS_DEBUG", "Playlists state before excludedSongs: ${playlists.map { it.name to it.tracks.size }}")
                 Log.d("EXCLUDED_SONGS_DEBUG", "Pending tracks state: ${pendingTracks.mapValues { it.value.size }}")
 
                 val numSongsInt = numSongs.toIntOrNull() ?: GrokConfig.DEFAULT_NUM_SONGS.toInt()
                 val maxSongsPerArtistInt = if (numSongsInt < 10) 1 else maxSongsPerArtist.toIntOrNull() ?: GrokConfig.DEFAULT_MAX_SONGS_PER_ARTIST.toInt()
-                val excludedUris = playlists.flatMap { it.tracks }
-                    .map { it.uri }
-                    .distinct()
+                val excludedSongs = playlists.flatMap { it.tracks }
+                    .distinctBy { it.uri }
                     .take(GrokConfig.MAX_EXCLUDED_URIS)
-                Log.d("EXCLUDED_SONGS_DEBUG", "Excluded URIs: ${excludedUris.joinToString(", ")}")
+                Log.d("EXCLUDED_SONGS_DEBUG", "Excluded songs: ${excludedSongs.map { "${it.title} by ${it.artist}" }}")
 
                 val songList = xAiApi.generateSongList(
                     vibe = vibe,
@@ -550,7 +570,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     maxSongsPerArtist = maxSongsPerArtistInt,
                     instrument = instrument.takeIf { it != GrokConfig.INSTRUMENT_OPTIONS.first() },
                     language = language.takeIf { it != GrokConfig.LANGUAGE_OPTIONS.first() },
-                    excludedUris = excludedUris
+                    excludedSongs = excludedSongs
                 ) ?: throw Exception("No songs from xAI API")
                 Log.d("EXCLUDED_SONGS_DEBUG", "Song list from Grok: $songList")
 

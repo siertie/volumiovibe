@@ -2,7 +2,7 @@ package com.example.volumiovibe
 
 object GrokConfig {
     // Prompts for xAI API
-    const val SONG_LIST_PROMPT = "Yo Grok, you my DJ! Gimme a list of %d songs for %s. %s%s%s%s%s %s If too few tracks match, fill with similar vibe/genre matches. Format: 'Artist - Title', one per line. No intros, no fluff, just the list."
+    const val SONG_LIST_PROMPT = "Yo Grok, you my DJ! Gimme a list of %d songs for %s. %s%s%s%s%s DO NOT INCLUDE these tracks if possible: %s. If too few tracks match, fill with similar vibe/genre matches. Format: 'Artist - Title', one per line. No intros, no fluff, just the list."
     const val PLAYLIST_NAME_PROMPT = "Yo Grok, gimme a dope playlist name for %s. %s%s%s%sTie it to the vibe or instrument. Keep it short, max %d chars, and hella fire. Just the name!"
 
     // Configurable max number of URIs to exclude
