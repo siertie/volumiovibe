@@ -140,11 +140,21 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                         }
                     }
                     playlistNames.reverse()
-                    Log.d(TAG, "Playlists (newest first): ${playlistNames.joinToString()}")
-                    val cachedPlaylists = playlistNames.mapIndexed { index, name ->
-                        PlaylistCache(name = name, lastUpdated = now - index, lastFetched = 0)
-                    }
+                    Log.d(TAG, "Parsed playlists: ${playlistNames.joinToString()}")
+                    playlists = playlistNames.map { Playlist(it, emptyList()) }
+                    Log.d(TAG, "Updated playlists state: ${playlists.map { it.name }.joinToString()}")
                     viewModelScope.launch {
+                        val existingPlaylists = withContext(Dispatchers.IO) { cacheDao.getPlaylists() }
+                        val cachedPlaylists = playlistNames.mapIndexed { index, name ->
+                            val existing = existingPlaylists.find { it.name == name }
+                            PlaylistCache(
+                                name = name,
+                                lastUpdated = now - index,
+                                lastFetched = existing?.lastFetched ?: now,
+                                contentHash = existing?.contentHash,
+                                isEmpty = existing?.isEmpty ?: false
+                            )
+                        }
                         withContext(Dispatchers.IO) {
                             cacheDao.insertPlaylists(cachedPlaylists)
                             fetchTracksUntilLimitChanged(playlistNames)
@@ -184,7 +194,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     val playlistName = response.optString("name", "").trim()
                     val uri = response.optString("uri", "")
                     if (playlistName.isNotBlank() && uri.isNotBlank()) {
-                        Log.d(TAG, "Track $uri removed from $playlistName, updakin’ cache")
+                        Log.d(TAG, "Track $uri removed from $playlistName, updatin’ cache")
                         viewModelScope.launch {
                             withContext(Dispatchers.IO) {
                                 val tracks = fetchTracksForPlaylist(playlistName)
@@ -206,7 +216,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                                 Log.w(TAG, "Invalid pushBrowseLibrary response: $arg")
                                 return@on
                             }
-                            JSONObject(arg.toString())
+                            JSONObject(arg)
                         }
                         is JSONObject -> arg
                         else -> {
@@ -382,7 +392,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     Log.d(TAG, "Retrieved ${cachedTracks.size} cached tracks for playlist '$playlistName' in ${System.currentTimeMillis() - cacheStart}ms")
                     val currentHash = computeTrackHash(cachedTracks)
                     val storedHash = withContext(Dispatchers.IO) { cacheDao.getPlaylistHash(playlistName) }
-                    val tracks = if (cachedPlaylist != null && (now - cachedPlaylist.lastFetched < cacheTTL) && (cachedPlaylist.isEmpty || cachedTracks.isNotEmpty())) {
+                    val tracks = if (cachedPlaylist != null && (cachedPlaylist.isEmpty || cachedTracks.isNotEmpty()) && (cachedPlaylist.lastFetched == 0L || now - cachedPlaylist.lastFetched < cacheTTL)) {
                         Log.d(TAG, "Usin’ cached tracks for $playlistName: ${if (cachedPlaylist.isEmpty) "empty" else "${cachedTracks.size} tracks"}")
                         cachedTracks
                     } else {
