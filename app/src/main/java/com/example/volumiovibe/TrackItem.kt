@@ -19,9 +19,9 @@ import coil.request.CachePolicy
 @Composable
 fun TrackItem(
     track: Track,
-    index: Int? = null, // For QueueActivity to show track number
-    onClick: (() -> Unit)? = null, // Click to play in QueueActivity
-    actionButtons: @Composable RowScope.() -> Unit, // Custom buttons (Add, Up/Down/Remove)
+    index: Int? = null,
+    onClick: (() -> Unit)? = null,
+    actionButtons: @Composable RowScope.() -> Unit,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -29,7 +29,7 @@ fun TrackItem(
             .fillMaxWidth()
             .padding(vertical = 6.dp)
             .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
-        shape = MaterialTheme.shapes.medium, // 16.dp from VolumioTheme
+        shape = MaterialTheme.shapes.medium,
         color = MaterialTheme.colorScheme.surface,
         contentColor = MaterialTheme.colorScheme.onSurface
     ) {
@@ -56,7 +56,7 @@ fun TrackItem(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .size(64.dp)
-                    .clip(MaterialTheme.shapes.small) // 8.dp rounded corners
+                    .clip(MaterialTheme.shapes.small)
                     .constrainAs(albumArt) {
                         start.linkTo(parent.start)
                         top.linkTo(parent.top)

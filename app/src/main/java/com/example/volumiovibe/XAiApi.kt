@@ -78,7 +78,7 @@ class XAiApi(private val apiKey: String) {
         val languageText = GrokConfig.getLanguageText(language)
         val excludeText = if (excludedSongs.isNotEmpty()) {
             val songDetails = excludedSongs.map { "'${it.title}' by '${it.artist}'" }.joinToString(", ")
-            "Try to avoid tracks like $songDetails."
+            "$songDetails."
         } else ""
         val prompt = String.format(
             GrokConfig.SONG_LIST_PROMPT,
