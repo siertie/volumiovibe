@@ -31,6 +31,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
     private val pendingTracks = mutableMapOf<String, MutableList<Track>>()
     private val browseRequests = ConcurrentHashMap<String, String>()
     private var lastPlaylistStateUpdate: Long = 0
+    private val loadedPlaylists = mutableSetOf<String>()
 
     private val _selectedVibe = mutableStateOf(prefs.getString("selectedVibe", GrokConfig.VIBE_OPTIONS.first()) ?: GrokConfig.VIBE_OPTIONS.first())
     var selectedVibe: String
@@ -148,8 +149,8 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     }
                     playlistNames.reverse()
                     Log.d(TAG, "Parsed playlists: ${playlistNames.joinToString()}")
-                    // Remove deleted playlists from pendingTracks
                     pendingTracks.keys.retainAll { it in playlistNames }
+                    loadedPlaylists.retainAll { it in playlistNames }
                     playlists = playlistNames.map { Playlist(it, pendingTracks[it] ?: emptyList()) }
                     Log.d(TAG, "Updated playlists state: ${playlists.map { it.name }.joinToString()}")
                 } catch (e: Exception) {
@@ -173,6 +174,8 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                                 if (playlist.name == playlistName) Playlist(playlist.name, tracks) else playlist
                             }
                             pendingTracks[playlistName] = tracks.toMutableList()
+                            loadedPlaylists.add(playlistName)
+                            Log.d("EXCLUDED_SONGS_DEBUG", "Tracks loaded for playlist after add: $playlistName")
                         }
                     }
                 } catch (e: Exception) {
@@ -193,6 +196,8 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                                 if (playlist.name == playlistName) Playlist(playlist.name, tracks) else playlist
                             }
                             pendingTracks[playlistName] = tracks.toMutableList()
+                            loadedPlaylists.add(playlistName)
+                            Log.d("EXCLUDED_SONGS_DEBUG", "Tracks loaded for playlist after remove: $playlistName")
                         }
                     }
                 } catch (e: Exception) {
@@ -201,6 +206,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
             }
             webSocketManager.on("pushBrowseLibrary") { args: Array<out Any> ->
                 Log.d(TAG, "Received pushBrowseLibrary: ${args[0]} at ${System.currentTimeMillis()}")
+                Log.d("EXCLUDED_SONGS_DEBUG", "Processing browseLibrary response: ${args[0]}")
                 try {
                     val data = when (val arg = args[0]) {
                         is String -> {
@@ -216,55 +222,81 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                             return@on
                         }
                     }
-                    val navigation = data.optJSONObject("navigation") ?: return@on
-                    val lists = navigation.optJSONArray("lists") ?: return@on
+                    val navigation = data.optJSONObject("navigation") ?: run {
+                        Log.w(TAG, "No navigation object in response")
+                        return@on
+                    }
+                    val lists = navigation.optJSONArray("lists") ?: run {
+                        Log.w(TAG, "No lists array in navigation")
+                        return@on
+                    }
                     val results = mutableListOf<Track>()
+                    val isSearchResult = navigation.optBoolean("isSearchResult", false)
                     var playlistName: String? = null
 
-                    val info = navigation.optJSONObject("info")
-                    val type = info?.optString("type")
-                    val title = info?.optString("title")?.trim()
-                    if (type == "play-playlist" && title != null && title.isNotBlank()) {
-                        playlistName = title
-                    }
-
+                    // Parse tracks from all lists
                     for (listIdx in 0 until lists.length()) {
-                        val list = lists.optJSONObject(listIdx) ?: continue
+                        val list = lists.getJSONObject(listIdx)
                         val items = list.optJSONArray("items") ?: continue
                         for (i in 0 until items.length()) {
                             val item = items.getJSONObject(i)
-                            val type = item.optString("type", "")
+                            val itemType = item.optString("type", "")
                             val title = item.optString("title", "Unknown Title")
                             val artist = item.optString("artist", "Unknown Artist")
                             val uri = item.optString("uri", "")
                             val service = item.optString("service", "mpd")
                             val albumArt = item.optString("albumart")
-                            if ((type == "song" || type == "folder-with-favourites") && uri.isNotBlank()) {
-                                results.add(Track(title, artist, uri, service, albumArt, type))
+                            if ((itemType == "song" || itemType == "folder-with-favourites") && uri.isNotBlank()) {
+                                results.add(Track(title, artist, uri, service, albumArt, itemType))
                             }
                         }
                     }
 
-                    if (playlistName != null) {
+                    if (isSearchResult) {
+                        // Handle search response
                         synchronized(browseRequests) {
-                            val requestId = browseRequests.entries.find { it.value == playlistName }?.key
-                            if (requestId != null) {
-                                playlists = playlists.map { playlist ->
-                                    if (playlist.name == playlistName) Playlist(playlist.name, results) else playlist
-                                }
-                                pendingTracks[playlistName] = results.toMutableList()
-                                browseRequests["$requestId:results"] = results.map { "${it.title},${it.artist},${it.uri},${it.service},${it.albumArt ?: ""},${it.type}" }.joinToString("|")
-                                Log.d(TAG, "Updated tracks for $playlistName: ${results.size} tracks")
-                                browseRequests.remove(requestId)
-                            } else {
-                                Log.w(TAG, "No request found for $playlistName, ignoring response")
-                            }
+                            browseRequests["search:results"] = results.map {
+                                "${it.title},${it.artist},${it.uri},${it.service},${it.albumArt ?: ""},${it.type}"
+                            }.joinToString("|")
+                            Log.d(TAG, "Set search:results with ${results.size} tracks: ${browseRequests["search:results"]}")
                         }
                     } else {
-                        synchronized(browseRequests) {
-                            browseRequests["search:results"] = results.map { "${it.title},${it.artist},${it.uri},${it.service},${it.albumArt ?: ""},${it.type}" }.joinToString("|")
+                        // Handle playlist response
+                        val info = navigation.optJSONObject("info")
+                        val type = info?.optString("type")
+                        val title = info?.optString("title")?.trim()
+                        if (type == "play-playlist" && title != null && title.isNotBlank()) {
+                            playlistName = title
+                            Log.d(TAG, "Extracted playlist name from info: $playlistName")
+                        } else if (lists.length() > 0) {
+                            val list = lists.optJSONObject(0)
+                            val listTitle = list?.optString("title")?.trim()
+                            if (listTitle != null && listTitle.isNotBlank()) {
+                                playlistName = listTitle
+                                Log.d(TAG, "Fallback: Using list title '$listTitle' as playlist name")
+                            }
                         }
-                        Log.d(TAG, "Search results: ${results.size} tracks")
+
+                        if (playlistName != null) {
+                            synchronized(browseRequests) {
+                                val requestId = browseRequests.entries.find { it.value == playlistName }?.key
+                                if (requestId != null) {
+                                    playlists = playlists.map { playlist ->
+                                        if (playlist.name == playlistName) Playlist(playlist.name, results) else playlist
+                                    }
+                                    pendingTracks[playlistName] = results.toMutableList()
+                                    browseRequests["$requestId:results"] = results.map {
+                                        "${it.title},${it.artist},${it.uri},${it.service},${it.albumArt ?: ""},${it.type}"
+                                    }.joinToString("|")
+                                    Log.d(TAG, "Updated tracks for $playlistName: ${results.size} tracks")
+                                    browseRequests.remove(requestId)
+                                    loadedPlaylists.add(playlistName)
+                                    Log.d("EXCLUDED_SONGS_DEBUG", "Tracks loaded for playlist: $playlistName")
+                                } else {
+                                    Log.w(TAG, "No request found for $playlistName, ignoring response")
+                                }
+                            }
+                        }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to parse pushBrowseLibrary: ${e.message}")
@@ -278,8 +310,9 @@ class PlaylistViewModel(application: Application) : ViewModel() {
         Log.d(TAG, "Emittin’ listPlaylist")
         webSocketManager.emit("listPlaylist", JSONObject())
         viewModelScope.launch {
-            delay(2000) // Give WebSocket time to respond
+            delay(2000)
             isLoading = false
+            Log.d("EXCLUDED_SONGS_DEBUG", "Playlists fetched: ${playlists.map { it.name }}")
         }
     }
 
@@ -298,7 +331,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
         while (attempt < maxRetries) {
             attempt++
             webSocketManager.emit("browseLibrary", JSONObject().put("uri", "playlists/$trimmedPlaylistName"))
-            val timeout = 2000L
+            val timeout = 5000L
             val startTime = System.currentTimeMillis()
             var shouldContinue = true
             while (System.currentTimeMillis() - startTime < timeout && shouldContinue) {
@@ -331,10 +364,26 @@ class PlaylistViewModel(application: Application) : ViewModel() {
         return tracks
     }
 
+    suspend fun fetchAllPlaylistTracks() {
+        val playlistsToFetch = playlists.filter { it.name !in loadedPlaylists }
+        Log.d("EXCLUDED_SONGS_DEBUG", "Fetching ${playlistsToFetch.size} playlists")
+
+        playlistsToFetch.forEach { playlist ->
+            val tracks = fetchTracksForPlaylist(playlist.name)
+            playlists = playlists.map { p ->
+                if (p.name == playlist.name) Playlist(p.name, tracks) else p
+            }
+            pendingTracks[playlist.name] = tracks.toMutableList()
+            loadedPlaylists.add(playlist.name)
+            Log.d("EXCLUDED_SONGS_DEBUG", "Loaded ${tracks.size} tracks for ${playlist.name}")
+        }
+    }
+
     fun browsePlaylistTracks(playlistName: String) {
         val trimmedPlaylistName = playlistName.trim()
         webSocketManager.emit("browseLibrary", JSONObject().put("uri", "playlists/$trimmedPlaylistName"))
         Log.d(TAG, "Emitted browseLibrary for playlist: $trimmedPlaylistName")
+        Log.d("EXCLUDED_SONGS_DEBUG", "Requested tracks for playlist: $trimmedPlaylistName")
     }
 
     fun createPlaylist(name: String) {
@@ -399,6 +448,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
         Log.d(TAG, "Emitted deletePlaylist: $trimmed")
         playlists = playlists.filter { it.name != trimmed }
         pendingTracks.remove(trimmed)
+        loadedPlaylists.remove(trimmed)
     }
 
     fun search(query: String) {
@@ -458,9 +508,28 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     Log.d(TAG, "Playlist $finalPlaylistName found in playlists!")
                 }
 
+                if (!webSocketManager.isConnected()) {
+                    Log.w("EXCLUDED_SONGS_DEBUG", "WebSocket disconnected, tryin’ to reconnect")
+                    webSocketManager.reconnect()
+                    delay(2000)
+                    if (!webSocketManager.isConnected()) {
+                        Log.e("EXCLUDED_SONGS_DEBUG", "WebSocket still disconnected, proceedin’ with empty excluded URIs")
+                    }
+                }
+
+                fetchAllPlaylistTracks()
+
+                Log.d("EXCLUDED_SONGS_DEBUG", "Playlists state before excludedUris: ${playlists.map { it.name to it.tracks.size }}")
+                Log.d("EXCLUDED_SONGS_DEBUG", "Pending tracks state: ${pendingTracks.mapValues { it.value.size }}")
+
                 val numSongsInt = numSongs.toIntOrNull() ?: GrokConfig.DEFAULT_NUM_SONGS.toInt()
                 val maxSongsPerArtistInt = if (numSongsInt < 10) 1 else maxSongsPerArtist.toIntOrNull() ?: GrokConfig.DEFAULT_MAX_SONGS_PER_ARTIST.toInt()
-                val excludedUris = playlists.flatMap { it.tracks }.map { it.uri }.distinct()
+                val excludedUris = playlists.flatMap { it.tracks }
+                    .map { it.uri }
+                    .distinct()
+                    .take(GrokConfig.MAX_EXCLUDED_URIS)
+                Log.d("EXCLUDED_SONGS_DEBUG", "Excluded URIs: ${excludedUris.joinToString(", ")}")
+
                 val songList = xAiApi.generateSongList(
                     vibe = vibe,
                     numSongs = numSongsInt,
@@ -471,12 +540,13 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     language = language.takeIf { it != GrokConfig.LANGUAGE_OPTIONS.first() },
                     excludedUris = excludedUris
                 ) ?: throw Exception("No songs from xAI API")
+                Log.d("EXCLUDED_SONGS_DEBUG", "Song list from Grok: $songList")
 
                 val tracks = songList.split("\n").mapNotNull { line ->
                     val parts = line.split(" - ", limit = 2)
                     if (parts.size == 2) parts[0].trim() to parts[1].trim() else null
                 }.take(numSongsInt)
-                Log.d(TAG, "Song list: ${tracks.size} tracks: $tracks")
+                Log.d("EXCLUDED_SONGS_DEBUG", "Parsed tracks: ${tracks.size} tracks: $tracks")
 
                 var addedTracks = 0
                 val addedUris = mutableSetOf<String>()
@@ -486,10 +556,10 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     if (addedTracks >= numSongsInt) break
                     val query = "$artist $title".replace(Regex("^\\d+\\.\\s*"), "")
                     search(query)
-                    Log.d(TAG, "Searchin’ for: $query")
+                    Log.d("EXCLUDED_SONGS_DEBUG", "Searchin’ for: $query")
                     val results = waitForSearchResults()
-                    Log.d(TAG, "Got ${results.size} results for $query: ${results.map { it.title }}")
-                    for (track in results.filter { it.type == "song" }) {
+                    Log.d("EXCLUDED_SONGS_DEBUG", "Got ${results.size} results for $query: ${results.map { it.title }}")
+                    for (track in results.filter { it.type == "song" || it.type == "folder-with-favourites" }) {
                         val trackKey = "${track.artist}:${track.title}".lowercase()
                         if (!trackKeys.contains(trackKey)) {
                             val currentCount = artistCounts.getOrDefault(track.artist, 0)
@@ -499,23 +569,23 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                                     addedTracks++
                                     artistCounts[track.artist] = currentCount + 1
                                     trackKeys.add(trackKey)
-                                    Log.d(TAG, "Added track: ${track.title} by ${track.artist}, URI: ${track.uri}, total added=$addedTracks")
+                                    Log.d("EXCLUDED_SONGS_DEBUG", "Added track: ${track.title} by ${track.artist}, URI: ${track.uri}, total added=$addedTracks")
                                     break
                                 } else {
-                                    Log.w(TAG, "Skipped duplicate URI: ${track.uri}")
+                                    Log.w("EXCLUDED_SONGS_DEBUG", "Skipped duplicate URI: ${track.uri}")
                                 }
                             } else {
-                                Log.w(TAG, "Skipped track: $title by $artist, max songs per artist ($maxSongsPerArtistInt) reached")
+                                Log.w("EXCLUDED_SONGS_DEBUG", "Skipped track: $title by $artist, max songs per artist ($maxSongsPerArtistInt) reached")
                             }
                         } else {
-                            Log.w(TAG, "Skipped duplicate track: $title by $artist")
+                            Log.w("EXCLUDED_SONGS_DEBUG", "Skipped duplicate track: $title by $artist")
                         }
                     }
                     if (results.isEmpty()) {
-                        Log.w(TAG, "No results for $query, movin’ on")
+                        Log.w("EXCLUDED_SONGS_DEBUG", "No results for $query, movin’ on")
                     }
                 }
-                Log.d(TAG, "Final track count: $addedTracks/$numSongsInt")
+                Log.d("EXCLUDED_SONGS_DEBUG", "Final track count: $addedTracks/$numSongsInt")
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "Created playlist '$finalPlaylistName' with $addedTracks/$numSongsInt tracks!", Toast.LENGTH_LONG).show()
                 }

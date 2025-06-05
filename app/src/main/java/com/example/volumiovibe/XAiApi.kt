@@ -69,7 +69,7 @@ class XAiApi(private val apiKey: String) {
         maxSongsPerArtist: Int,
         instrument: String? = null,
         language: String? = null,
-        excludedUris: List<String> = emptyList() // Added parameter
+        excludedUris: List<String> = emptyList()
     ): String? = withContext(Dispatchers.IO) {
         val artistText = GrokConfig.getArtistText(artists)
         val eraText = GrokConfig.getEraText(era)
@@ -77,12 +77,13 @@ class XAiApi(private val apiKey: String) {
         val instrumentText = GrokConfig.getInstrumentText(instrument)
         val languageText = GrokConfig.getLanguageText(language)
         val excludeText = if (excludedUris.isNotEmpty()) {
-            "Exclude tracks with these URIs: ${excludedUris.joinToString(", ")}"
+            "Try to avoid tracks with these URIs if possible: ${excludedUris.joinToString(", ")}."
         } else ""
         val prompt = String.format(
             GrokConfig.SONG_LIST_PROMPT,
             numSongs, vibe, artistText, eraText, maxArtistText, instrumentText, languageText, excludeText
         )
+        Log.d("EXCLUDED_SONGS_DEBUG", "Final Prompt: $prompt")
         val payload = JSONObject().apply {
             put("messages", JSONArray().apply {
                 put(JSONObject().apply {
