@@ -246,7 +246,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                             val uri = item.optString("uri", "")
                             val service = item.optString("service", "mpd")
                             val albumArt = item.optString("albumart")
-                            if ((itemType == "song" || itemType == "folder-with-favourites") && uri.isNotBlank()) {
+                            if ((itemType == "song" || itemType == "album") && uri.isNotBlank()) {
                                 results.add(Track(title, artist, uri, service, albumArt, itemType))
                             }
                         }
@@ -396,7 +396,6 @@ class PlaylistViewModel(application: Application) : ViewModel() {
         val trimmed = playlistName.trim()
         val service = when {
             trackUri.startsWith("tidal://") -> "tidal"
-            trackType == "folder-with-favourites" -> "tidal"
             else -> "mpd"
         }
         val data = JSONObject().apply {
@@ -474,6 +473,19 @@ class PlaylistViewModel(application: Application) : ViewModel() {
         return emptyList()
     }
 
+    // Fuzzy match for title and artist
+    private fun isTrackMatch(requestedTitle: String, requestedArtist: String, trackTitle: String, trackArtist: String): Boolean {
+        val cleanRequestedTitle = requestedTitle.lowercase().replace(Regex("[^a-z0-9 ]"), "")
+        val cleanTrackTitle = trackTitle.lowercase().replace(Regex("[^a-z0-9 ]"), "")
+        val cleanRequestedArtist = requestedArtist.lowercase().replace(Regex("[^a-z0-9 ]"), "")
+        val cleanTrackArtist = trackArtist.lowercase().replace(Regex("[^a-z0-9 ]"), "")
+
+        val titleMatch = cleanTrackTitle.contains(cleanRequestedTitle) || cleanRequestedTitle.contains(cleanTrackTitle)
+        val artistMatch = cleanTrackArtist.contains(cleanRequestedArtist) || cleanRequestedArtist.contains(cleanTrackArtist)
+
+        return titleMatch && artistMatch
+    }
+
     fun generateAiPlaylist(context: Context) {
         viewModelScope.launch {
             isLoading = true
@@ -544,7 +556,11 @@ class PlaylistViewModel(application: Application) : ViewModel() {
 
                 val tracks = songList.split("\n").mapNotNull { line ->
                     val parts = line.split(" - ", limit = 2)
-                    if (parts.size == 2) parts[0].trim() to parts[1].trim() else null
+                    if (parts.size == 2) {
+                        val artist = parts[0].trim().replace(Regex("^\\d+\\.\\s*"), "")
+                        val title = parts[1].trim()
+                        artist to title
+                    } else null
                 }.take(numSongsInt)
                 Log.d("EXCLUDED_SONGS_DEBUG", "Parsed tracks: ${tracks.size} tracks: $tracks")
 
@@ -554,35 +570,38 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                 val trackKeys = mutableSetOf<String>()
                 for ((artist, title) in tracks) {
                     if (addedTracks >= numSongsInt) break
-                    val query = "$artist $title".replace(Regex("^\\d+\\.\\s*"), "")
+                    val query = "$artist $title"
                     search(query)
                     Log.d("EXCLUDED_SONGS_DEBUG", "Searchin’ for: $query")
                     val results = waitForSearchResults()
                     Log.d("EXCLUDED_SONGS_DEBUG", "Got ${results.size} results for $query: ${results.map { it.title }}")
-                    for (track in results.filter { it.type == "song" || it.type == "folder-with-favourites" }) {
-                        val trackKey = "${track.artist}:${track.title}".lowercase()
+
+                    // Select the best matching track
+                    val selectedTrack = results.filter { it.type == "song" }
+                        .firstOrNull { isTrackMatch(title, artist, it.title, it.artist) }
+
+                    if (selectedTrack != null) {
+                        val trackKey = "${selectedTrack.artist}:${selectedTrack.title}".lowercase()
                         if (!trackKeys.contains(trackKey)) {
-                            val currentCount = artistCounts.getOrDefault(track.artist, 0)
+                            val currentCount = artistCounts.getOrDefault(selectedTrack.artist, 0)
                             if (currentCount < maxSongsPerArtistInt) {
-                                if (addedUris.add(track.uri)) {
-                                    addToPlaylist(finalPlaylistName, track.uri, track.type)
+                                if (addedUris.add(selectedTrack.uri)) {
+                                    addToPlaylist(finalPlaylistName, selectedTrack.uri, selectedTrack.type)
                                     addedTracks++
-                                    artistCounts[track.artist] = currentCount + 1
+                                    artistCounts[selectedTrack.artist] = currentCount + 1
                                     trackKeys.add(trackKey)
-                                    Log.d("EXCLUDED_SONGS_DEBUG", "Added track: ${track.title} by ${track.artist}, URI: ${track.uri}, total added=$addedTracks")
-                                    break
+                                    Log.d("EXCLUDED_SONGS_DEBUG", "Added track: ${selectedTrack.title} by ${selectedTrack.artist}, URI: ${selectedTrack.uri}, total added=$addedTracks")
                                 } else {
-                                    Log.w("EXCLUDED_SONGS_DEBUG", "Skipped duplicate URI: ${track.uri}")
+                                    Log.w("EXCLUDED_SONGS_DEBUG", "Skipped duplicate URI: ${selectedTrack.uri}")
                                 }
                             } else {
-                                Log.w("EXCLUDED_SONGS_DEBUG", "Skipped track: $title by $artist, max songs per artist ($maxSongsPerArtistInt) reached")
+                                Log.w("EXCLUDED_SONGS_DEBUG", "Skipped track: ${selectedTrack.title} by ${selectedTrack.artist}, max songs per artist ($maxSongsPerArtistInt) reached")
                             }
                         } else {
-                            Log.w("EXCLUDED_SONGS_DEBUG", "Skipped duplicate track: $title by $artist")
+                            Log.w("EXCLUDED_SONGS_DEBUG", "Skipped duplicate track: ${selectedTrack.title} by ${selectedTrack.artist}")
                         }
-                    }
-                    if (results.isEmpty()) {
-                        Log.w("EXCLUDED_SONGS_DEBUG", "No results for $query, movin’ on")
+                    } else {
+                        Log.w("EXCLUDED_SONGS_DEBUG", "No matching track found for $query")
                     }
                 }
                 Log.d("EXCLUDED_SONGS_DEBUG", "Final track count: $addedTracks/$numSongsInt")
