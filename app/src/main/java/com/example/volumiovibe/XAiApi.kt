@@ -77,8 +77,12 @@ class XAiApi(private val apiKey: String) {
         val instrumentText = GrokConfig.getInstrumentText(instrument)
         val languageText = GrokConfig.getLanguageText(language)
         val excludeText = if (excludedSongs.isNotEmpty()) {
-            val songDetails = excludedSongs.map { "'${it.title}' by '${it.artist}'" }.joinToString(", ")
-            "$songDetails."
+            // Clean title by removing anything in parentheses and format as "Artist - Title"
+            val songDetails = excludedSongs.map { track ->
+                val cleanTitle = track.title.replace("\\s*\\([^)]+\\)".toRegex(), "").trim()
+                "${track.artist} - $cleanTitle"
+            }.joinToString(", ")
+            "DO NOT INCLUDE these tracks: $songDetails."
         } else ""
         val prompt = String.format(
             GrokConfig.SONG_LIST_PROMPT,
