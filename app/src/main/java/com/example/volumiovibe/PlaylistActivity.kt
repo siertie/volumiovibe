@@ -30,10 +30,8 @@ import com.example.volumiovibe.ui.theme.AppTheme
 import com.example.volumiovibe.ui.theme.ThemeMode
 import androidx.lifecycle.ViewModelProvider
 
-// Playlist data class
 data class Playlist(val name: String, val tracks: List<Track>)
 
-// PlaylistStateHolder
 object PlaylistStateHolder {
     var selectedVibe: String = GrokConfig.VIBE_OPTIONS.first()
     var vibeInput: String = ""
@@ -75,7 +73,7 @@ fun PlaylistScreen(
     themeMode: ThemeMode,
     onThemeModeChange: (ThemeMode) -> Unit
 ) {
-    val TAG = "PlaylistScreen"
+    val TAG = "VIBE_DEBUG"
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
@@ -404,6 +402,7 @@ fun PlaylistsSection(
     onDelete: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    Log.d("VIBE_DEBUG", "Renderin’ PlaylistsSection, playlists: ${viewModel.playlists.size}, names: ${viewModel.playlists.map { it.name }}")
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
@@ -461,7 +460,7 @@ fun PlaylistsSection(
                                 isExpanded = expandedPlaylist == playlist.name,
                                 onToggle = {
                                     onPlaylistToggle(if (expandedPlaylist == playlist.name) null else playlist.name)
-                                    if (expandedPlaylist != playlist.name) {
+                                    if (expandedPlaylist != playlist.name && playlist.tracks.isEmpty()) {
                                         viewModel.browsePlaylistTracks(playlist.name)
                                     }
                                 },
@@ -486,6 +485,7 @@ fun PlaylistItem(
     onDelete: () -> Unit,
     viewModel: PlaylistViewModel
 ) {
+    val isLoadingTracks by remember { mutableStateOf(playlist.tracks.isEmpty() && isExpanded) }
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         modifier = Modifier
@@ -511,7 +511,7 @@ fun PlaylistItem(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = "${playlist.tracks.size} tracks",
+                        text = if (isLoadingTracks) "Loadin’ tracks..." else "${playlist.tracks.size} tracks",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -530,8 +530,31 @@ fun PlaylistItem(
                     )
                 }
             }
-            if (isExpanded && playlist.tracks.isNotEmpty()) {
-                TrackList(playlist.tracks, playlist.name, viewModel)
+            if (isExpanded) {
+                if (isLoadingTracks) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(100.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                } else if (playlist.tracks.isEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(100.dp)
+                            .clickable { viewModel.browsePlaylistTracks(playlist.name) },
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Text("No tracks found, fam")
+                        Text("Tap to retry", style = MaterialTheme.typography.bodySmall)
+                    }
+                } else {
+                    TrackList(playlist.tracks, playlist.name, viewModel)
+                }
             }
         }
     }

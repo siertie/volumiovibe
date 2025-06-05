@@ -21,10 +21,11 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 class PlaylistViewModel(application: Application) : ViewModel() {
-    private val TAG = "VolumioCache"
+    private val TAG = "VIBE_DEBUG"
     private val webSocketManager = WebSocketManager
     private val xAiApi = XAiApi(BuildConfig.XAI_API_KEY)
-    private val prefs: SharedPreferences = application.getSharedPreferences("VolumioVibePrefs", Context.MODE_PRIVATE)
+    private val prefs = application.getSharedPreferences("VolumioVibePrefs", Context.MODE_PRIVATE)
+    private val application = application
 
     var playlists by mutableStateOf<List<Playlist>>(emptyList())
     var isLoading by mutableStateOf(false)
@@ -116,45 +117,71 @@ class PlaylistViewModel(application: Application) : ViewModel() {
 
     init {
         connectWebSocket()
-        viewModelScope.launch { fetchPlaylists() }
     }
 
     private fun connectWebSocket() {
         viewModelScope.launch {
+            Log.d(TAG, "Startin’ WebSocket init")
             webSocketManager.initialize()
             webSocketManager.debugAllEvents()
-            webSocketManager.on("pushListPlaylist") { args: Array<out Any> ->
-                Log.d(TAG, "Got pushListPlaylist: ${args[0]}")
-                try {
-                    val now = System.currentTimeMillis()
-                    if (now - lastPlaylistStateUpdate < 2000) {
-                        Log.d(TAG, "Debouncin’ pushListPlaylist, too soon")
-                        return@on
+            Log.d(TAG, "WebSocket connected: ${webSocketManager.isConnected()}")
+            if (webSocketManager.isConnected()) {
+                Log.d(TAG, "WebSocket good, fetchin’ playlists")
+                fetchPlaylists()
+            } else {
+                Log.w(TAG, "WebSocket not connected, tryin’ to reconnect")
+                webSocketManager.reconnect()
+                delay(1000)
+                if (webSocketManager.isConnected()) {
+                    Log.d(TAG, "Reconnect worked, fetchin’ playlists")
+                    fetchPlaylists()
+                } else {
+                    Log.e(TAG, "WebSocket still down, fam")
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(application, "Server’s ghostin’, fam!", Toast.LENGTH_LONG).show()
                     }
-                    lastPlaylistStateUpdate = now
-                    val data: JSONArray = when (val arg = args[0]) {
-                        is String -> if (arg == "undefined") JSONArray() else JSONArray(arg)
-                        is JSONArray -> arg
+                }
+            }
+            webSocketManager.on("pushListPlaylist") { args: Array<out Any> ->
+                Log.d(TAG, "Got pushListPlaylist, args count: ${args.size}, raw: ${args.getOrNull(0)}")
+                try {
+                    val data: JSONArray = when (val arg = args.getOrNull(0)) {
+                        is String -> {
+                            Log.d(TAG, "Arg is String: $arg")
+                            if (arg == "undefined" || arg.isBlank()) JSONArray() else JSONArray(arg)
+                        }
+                        is JSONArray -> {
+                            Log.d(TAG, "Arg is JSONArray: $arg")
+                            arg
+                        }
+                        is JSONObject -> {
+                            Log.d(TAG, "Arg is JSONObject: $arg")
+                            arg.optJSONArray("playlists") ?: JSONArray()
+                        }
                         else -> {
-                            Log.w(TAG, "Weird pushListPlaylist type: ${arg?.javaClass?.simpleName}")
-                            return@on
+                            Log.w(TAG, "Weird arg type: ${arg?.javaClass?.simpleName}")
+                            JSONArray()
                         }
                     }
+                    Log.d(TAG, "Parsed JSONArray: $data, length: ${data.length()}")
                     val playlistNames = mutableListOf<String>()
                     for (i in 0 until data.length()) {
                         val name = data.optString(i).trim()
-                        if (name != "undefined") {
+                        Log.d(TAG, "Playlist item $i: '$name'")
+                        if (name.isNotBlank() && name != "undefined") {
                             playlistNames.add(name)
                         }
                     }
                     playlistNames.reverse()
-                    Log.d(TAG, "Parsed playlists: ${playlistNames.joinToString()}")
+                    Log.d(TAG, "Got ${playlistNames.size} playlist names: ${playlistNames.joinToString()}")
                     pendingTracks.keys.retainAll { it in playlistNames }
                     loadedPlaylists.retainAll { it in playlistNames }
+                    val oldSize = playlists.size
                     playlists = playlistNames.map { Playlist(it, pendingTracks[it] ?: emptyList()) }
-                    Log.d(TAG, "Updated playlists state: ${playlists.map { it.name }.joinToString()}")
+                    Log.d(TAG, "Updated playlists, old size: $oldSize, new size: ${playlists.size}, names: ${playlists.map { it.name }}")
+                    playlists = playlists.toList()
                 } catch (e: Exception) {
-                    Log.e(TAG, "pushListPlaylist parse failed: ${e.message}")
+                    Log.e(TAG, "pushListPlaylist parse crashed: ${e.message}", e)
                 }
             }
             webSocketManager.on("pushCreatePlaylist") { args: Array<out Any> ->
@@ -234,7 +261,6 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     val isSearchResult = navigation.optBoolean("isSearchResult", false)
                     var playlistName: String? = null
 
-                    // Parse tracks from all lists
                     for (listIdx in 0 until lists.length()) {
                         val list = lists.getJSONObject(listIdx)
                         val items = list.optJSONArray("items") ?: continue
@@ -253,15 +279,13 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     }
 
                     if (isSearchResult) {
-                        // Handle search response
                         synchronized(browseRequests) {
                             browseRequests["search:results"] = results.map {
                                 "${it.title},${it.artist},${it.uri},${it.service},${it.albumArt ?: ""},${it.type}"
                             }.joinToString("|")
-                            Log.d(TAG, "Set search:results with ${results.size} tracks: ${browseRequests["search:results"]}")
+                            Log.d(TAG, "Set search:results with ${results.size} tracks")
                         }
                     } else {
-                        // Handle playlist response
                         val info = navigation.optJSONObject("info")
                         val type = info?.optString("type")
                         val title = info?.optString("title")?.trim()
@@ -279,6 +303,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
 
                         if (playlistName != null) {
                             synchronized(browseRequests) {
+                                Log.d(TAG, "Checkin’ browseRequests for $playlistName, current: ${browseRequests.entries.joinToString { "${it.key}=${it.value}" }}")
                                 val requestId = browseRequests.entries.find { it.value == playlistName }?.key
                                 if (requestId != null) {
                                     playlists = playlists.map { playlist ->
@@ -288,18 +313,31 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                                     browseRequests["$requestId:results"] = results.map {
                                         "${it.title},${it.artist},${it.uri},${it.service},${it.albumArt ?: ""},${it.type}"
                                     }.joinToString("|")
-                                    Log.d(TAG, "Updated tracks for $playlistName: ${results.size} tracks")
+                                    Log.d(TAG, "Updated tracks for $playlistName: ${results.size} tracks: ${results.map { "${it.artist} - ${it.title}" }}")
                                     browseRequests.remove(requestId)
                                     loadedPlaylists.add(playlistName)
                                     Log.d("EXCLUDED_SONGS_DEBUG", "Tracks loaded for playlist: $playlistName")
+                                    playlists = playlists.toList() // Force UI refresh
                                 } else {
-                                    Log.w(TAG, "No request found for $playlistName, ignoring response")
+                                    Log.w(TAG, "No request found for $playlistName, tryin’ fallback")
+                                    // Fallback: Update playlist if name matches any playlist
+                                    if (playlists.any { it.name == playlistName }) {
+                                        playlists = playlists.map { playlist ->
+                                            if (playlist.name == playlistName) Playlist(playlist.name, results) else playlist
+                                        }
+                                        pendingTracks[playlistName] = results.toMutableList()
+                                        loadedPlaylists.add(playlistName)
+                                        Log.d(TAG, "Fallback: Updated tracks for $playlistName: ${results.size} tracks: ${results.map { "${it.artist} - ${it.title}" }}")
+                                        playlists = playlists.toList() // Force UI refresh
+                                    } else {
+                                        Log.w(TAG, "Fallback failed: $playlistName not in playlists")
+                                    }
                                 }
                             }
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to parse pushBrowseLibrary: ${e.message}")
+                    Log.e(TAG, "Failed to parse pushBrowseLibrary: ${e.message}", e)
                 }
             }
         }
@@ -307,31 +345,41 @@ class PlaylistViewModel(application: Application) : ViewModel() {
 
     fun fetchPlaylists() {
         isLoading = true
-        Log.d(TAG, "Emittin’ listPlaylist")
+        Log.d(TAG, "Emittin’ listPlaylist to server")
         webSocketManager.emit("listPlaylist", JSONObject())
         viewModelScope.launch {
-            delay(2000)
+            delay(3000)
             isLoading = false
-            Log.d("EXCLUDED_SONGS_DEBUG", "Playlists fetched: ${playlists.map { it.name }}")
+            Log.d(TAG, "Playlist fetch done, got ${playlists.size} playlists: ${playlists.map { it.name }}")
+            if (playlists.isEmpty()) {
+                Log.w(TAG, "No playlists loaded, fam")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(application, "No playlists found, dawg!", Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 
     private suspend fun fetchTracksForPlaylist(playlistName: String): List<Track> {
         val trimmedPlaylistName = playlistName.trim()
-        Log.d(TAG, "Fetchin’ tracks for playlist: $trimmedPlaylistName")
+        Log.d(TAG, "Fetchin’ tracks for: $trimmedPlaylistName")
         val requestId = UUID.randomUUID().toString()
         synchronized(browseRequests) {
             browseRequests[requestId] = trimmedPlaylistName
+            Log.d(TAG, "Added browse request: $requestId -> $trimmedPlaylistName, current requests: ${browseRequests.entries.joinToString { "${it.key}=${it.value}" }}")
         }
         var tracks = listOf<Track>()
         var attempt = 0
-        val maxRetries = 1
-        val baseDelay = 200L
+        val maxRetries = 3
+        val baseDelay = 500L
         val fetchStart = System.currentTimeMillis()
         while (attempt < maxRetries) {
             attempt++
-            webSocketManager.emit("browseLibrary", JSONObject().put("uri", "playlists/$trimmedPlaylistName"))
-            val timeout = 5000L
+            Log.d(TAG, "Attempt $attempt/$maxRetries for $trimmedPlaylistName")
+            // Try playlists/favourites as URI based on server response
+            webSocketManager.emit("browseLibrary", JSONObject().put("uri", "playlists/favourites"))
+            Log.d(TAG, "Emitted browseLibrary with uri: playlists/favourites")
+            val timeout = 10000L
             val startTime = System.currentTimeMillis()
             var shouldContinue = true
             while (System.currentTimeMillis() - startTime < timeout && shouldContinue) {
@@ -344,39 +392,42 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                         }.distinctBy { it.uri }
                         browseRequests.remove(resultKey)
                         shouldContinue = false
+                        Log.d(TAG, "Got ${tracks.size} tracks for $trimmedPlaylistName: ${tracks.map { "${it.artist} - ${it.title}" }}")
                     }
                 }
                 delay(50)
             }
             synchronized(browseRequests) {
                 browseRequests.entries.removeIf { it.value == trimmedPlaylistName }
+                Log.d(TAG, "Cleaned browseRequests, remaining: ${browseRequests.entries.joinToString { "${it.key}=${it.value}" }}")
             }
-            if (tracks.isNotEmpty() || shouldContinue == false) break
-            if (System.currentTimeMillis() - startTime >= timeout) {
-                Log.w(TAG, "Timeout fetching tracks for $trimmedPlaylistName, attempt $attempt/$maxRetries")
-                if (attempt < maxRetries) delay(baseDelay)
-            }
+            if (tracks.isNotEmpty() || !shouldContinue) break
+            Log.w(TAG, "Timeout on attempt $attempt/$maxRetries for $trimmedPlaylistName")
+            if (attempt < maxRetries) delay(baseDelay * attempt)
         }
         if (tracks.isEmpty()) {
-            Log.e(TAG, "Failed to fetch tracks for $trimmedPlaylistName after $maxRetries attempts")
+            Log.e(TAG, "No tracks fetched for $trimmedPlaylistName after $maxRetries attempts")
+            withContext(Dispatchers.Main) {
+                Toast.makeText(application, "Couldn’t load tracks for $trimmedPlaylistName, fam!", Toast.LENGTH_LONG).show()
+            }
         }
-        Log.d(TAG, "Got ${tracks.size} unique tracks for $trimmedPlaylistName: ${tracks.map { "${it.artist} - ${it.title}" }}, took ${System.currentTimeMillis() - fetchStart}ms")
         return tracks
     }
 
     suspend fun fetchAllPlaylistTracks() {
         val playlistsToFetch = playlists.filter { it.name !in loadedPlaylists }
-        Log.d("EXCLUDED_SONGS_DEBUG", "Fetching ${playlistsToFetch.size} playlists")
-
-        playlistsToFetch.forEach { playlist ->
+        Log.d(TAG, "Fetchin’ tracks for ${playlistsToFetch.size} playlists: ${playlistsToFetch.map { it.name }}")
+        playlistsToFetch.forEachIndexed { index, playlist ->
+            delay((500 * index).toLong())
             val tracks = fetchTracksForPlaylist(playlist.name)
             playlists = playlists.map { p ->
                 if (p.name == playlist.name) Playlist(p.name, tracks) else p
             }
             pendingTracks[playlist.name] = tracks.toMutableList()
             loadedPlaylists.add(playlist.name)
-            Log.d("EXCLUDED_SONGS_DEBUG", "Loaded ${tracks.size} tracks for ${playlist.name}")
+            Log.d(TAG, "Loaded ${tracks.size} tracks for ${playlist.name}")
         }
+        playlists = playlists.toList()
     }
 
     fun browsePlaylistTracks(playlistName: String) {
@@ -474,7 +525,6 @@ class PlaylistViewModel(application: Application) : ViewModel() {
     }
 
     private fun isTrackMatch(requestedTitle: String, requestedArtist: String, trackTitle: String, trackArtist: String): Boolean {
-        // Enhanced cleaning: lowercase, remove non-alphanumeric except spaces, normalize spaces, trim
         val cleanRequestedTitle = requestedTitle.lowercase()
             .replace(Regex("[^a-z0-9 ]"), "")
             .replace(Regex(" +"), " ")
@@ -492,18 +542,11 @@ class PlaylistViewModel(application: Application) : ViewModel() {
             .replace(Regex(" +"), " ")
             .trim()
 
-        // Check if one title contains the other
         val titleMatch = cleanTrackTitle.contains(cleanRequestedTitle) ||
                 cleanRequestedTitle.contains(cleanTrackTitle)
-
-        // Check if the requested artist is in the track title
         val artistInTitle = cleanTrackTitle.contains(cleanRequestedArtist)
-
-        // Check if one artist contains the other
         val artistMatch = cleanTrackArtist.contains(cleanRequestedArtist) ||
                 cleanRequestedArtist.contains(cleanTrackArtist)
-
-        // Match if title matches and either artist matches or artist is in the title
         return titleMatch && (artistMatch || artistInTitle)
     }
 
@@ -596,7 +639,6 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     val results = waitForSearchResults()
                     Log.d("EXCLUDED_SONGS_DEBUG", "Got ${results.size} results for $query: ${results.map { it.title }}")
 
-                    // Select the best matching track
                     val selectedTrack = results.filter { it.type == "song" }
                         .firstOrNull { isTrackMatch(title, artist, it.title, it.artist) }
 
