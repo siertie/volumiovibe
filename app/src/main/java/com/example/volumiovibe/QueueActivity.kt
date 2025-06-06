@@ -286,6 +286,20 @@ class QueueActivity : ComponentActivity() {
                 ) {
                     Text("Go to Playlist")
                 }
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        Log.d(TAG, "Navigatin’ to NanoDigiActivity")
+                        context.startActivity(Intent(context, NanoDigiActivity::class.java))
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondary,
+                        contentColor = MaterialTheme.colorScheme.onSecondary
+                    )
+                ) {
+                    Text("Go to nanoDIGI")
+                }
                 Spacer(modifier = Modifier.height(16.dp))
                 LazyColumn {
                     itemsIndexed(

@@ -147,6 +147,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
             webSocketManager.on("pushListPlaylist") { args: Array<out Any> ->
                 Log.d(TAG, "Got pushListPlaylist, args count: ${args.size}, raw: ${args.getOrNull(0)}")
                 try {
+                    // Parse WebSocket data into playlist names
                     val data: JSONArray = when (val arg = args.getOrNull(0)) {
                         is String -> {
                             Log.d(TAG, "Arg is String: $arg")
@@ -176,17 +177,36 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     }
                     playlistNames.reverse()
                     Log.d(TAG, "Got ${playlistNames.size} playlist names: ${playlistNames.joinToString()}")
+
+                    // Batch update: Clean up old data and set new playlists once
                     pendingTracks.keys.retainAll { it in playlistNames }
                     loadedPlaylists.retainAll { it in playlistNames }
                     val oldSize = playlists.size
-                    playlists = playlistNames.map { Playlist(it, pendingTracks[it] ?: emptyList()) }
+                    val newPlaylists = playlistNames.map { Playlist(it, pendingTracks[it] ?: emptyList()) }
+                    playlists = newPlaylists
                     Log.d(TAG, "Updated playlists, old size: $oldSize, new size: ${playlists.size}, names: ${playlists.map { it.name }}")
-                    playlists = playlists.toList()
 
-                    // Fetch tracks for all playlists in the background
+                    // Fetch tracks only for the first 3 visible playlists
                     viewModelScope.launch {
-                        Log.d(TAG, "Kickin’ off fetchAllPlaylistTracks for ${playlists.size} playlists")
-                        fetchAllPlaylistTracks()
+                        playlists.take(3).forEach { playlist ->
+                            if (playlist.name !in loadedPlaylists) {
+                                try {
+                                    val tracks = fetchTracksForPlaylist(playlist.name)
+                                    playlists = playlists.map { p ->
+                                        if (p.name == playlist.name) Playlist(p.name, tracks) else p
+                                    }
+                                    pendingTracks[playlist.name] = tracks.toMutableList()
+                                    loadedPlaylists.add(playlist.name)
+                                    Log.d(TAG, "Loaded ${tracks.size} tracks for ${playlist.name}")
+                                } catch (e: Exception) {
+                                    Log.e(TAG, "Failed to load tracks for ${playlist.name}: ${e.message}")
+                                    withContext(Dispatchers.Main) {
+                                        Toast.makeText(application, "Failed to load tracks for ${playlist.name}, fam!", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        }
+                        playlists = playlists.toList() // Force UI refresh
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "pushListPlaylist parse crashed: ${e.message}")
@@ -345,7 +365,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                         }
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to parse pushBrowseLibrary: ${e.message}", e)
+                    Log.e(TAG, "Failed to parse pushBrowseLibrary: ${e.message}")
                 }
             }
         }
