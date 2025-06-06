@@ -180,6 +180,12 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     playlists = playlistNames.map { Playlist(it, pendingTracks[it] ?: emptyList()) }
                     Log.d(TAG, "Updated playlists, old size: $oldSize, new size: ${playlists.size}, names: ${playlists.map { it.name }}")
                     playlists = playlists.toList()
+
+                    // Fetch tracks for all playlists in the background
+                    viewModelScope.launch {
+                        Log.d(TAG, "Kickin’ off fetchAllPlaylistTracks for ${playlists.size} playlists")
+                        fetchAllPlaylistTracks()
+                    }
                 } catch (e: Exception) {
                     Log.e(TAG, "pushListPlaylist parse crashed: ${e.message}", e)
                 }
@@ -376,9 +382,9 @@ class PlaylistViewModel(application: Application) : ViewModel() {
         while (attempt < maxRetries) {
             attempt++
             Log.d(TAG, "Attempt $attempt/$maxRetries for $trimmedPlaylistName")
-            // Try playlists/favourites as URI based on server response
-            webSocketManager.emit("browseLibrary", JSONObject().put("uri", "playlists/favourites"))
-            Log.d(TAG, "Emitted browseLibrary with uri: playlists/favourites")
+            // Use the correct playlist URI
+            webSocketManager.emit("browseLibrary", JSONObject().put("uri", "playlists/$trimmedPlaylistName"))
+            Log.d(TAG, "Emitted browseLibrary with uri: playlists/$trimmedPlaylistName")
             val timeout = 10000L
             val startTime = System.currentTimeMillis()
             var shouldContinue = true
