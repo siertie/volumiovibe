@@ -2,7 +2,6 @@ package com.example.volumiovibe
 
 import android.app.Application
 import android.content.Context
-import android.content.SharedPreferences
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.runtime.getValue
@@ -12,6 +11,9 @@ import androidx.core.content.edit
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -187,7 +189,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                         fetchAllPlaylistTracks()
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "pushListPlaylist parse crashed: ${e.message}", e)
+                    Log.e(TAG, "pushListPlaylist parse crashed: ${e.message}")
                 }
             }
             webSocketManager.on("pushCreatePlaylist") { args: Array<out Any> ->
@@ -421,18 +423,33 @@ class PlaylistViewModel(application: Application) : ViewModel() {
     }
 
     suspend fun fetchAllPlaylistTracks() {
-        val playlistsToFetch = playlists.filter { it.name !in loadedPlaylists }
-        Log.d(TAG, "Fetchin’ tracks for ${playlistsToFetch.size} playlists: ${playlistsToFetch.map { it.name }}")
-        playlistsToFetch.forEachIndexed { index, playlist ->
-            delay((500 * index).toLong())
-            val tracks = fetchTracksForPlaylist(playlist.name)
-            playlists = playlists.map { p ->
-                if (p.name == playlist.name) Playlist(p.name, tracks) else p
-            }
-            pendingTracks[playlist.name] = tracks.toMutableList()
-            loadedPlaylists.add(playlist.name)
-            Log.d(TAG, "Loaded ${tracks.size} tracks for ${playlist.name}")
+        // Explicit type for playlistsToFetch
+        val playlistsToFetch: List<Playlist> = playlists.filter { it.name !in loadedPlaylists }
+        Log.d(TAG, "Fetchin’ tracks for ${playlistsToFetch.size} playlists in parallel")
+
+        // Use coroutineScope to manage async tasks
+        coroutineScope {
+            playlistsToFetch.map { playlist: Playlist ->
+                async(Dispatchers.IO) {
+                    try {
+                        val tracks: List<Track> = fetchTracksForPlaylist(playlist.name)
+                        playlists = playlists.map { p ->
+                            if (p.name == playlist.name) Playlist(p.name, tracks) else p
+                        }
+                        pendingTracks[playlist.name] = tracks.toMutableList()
+                        loadedPlaylists.add(playlist.name)
+                        Log.d(TAG, "Loaded ${tracks.size} tracks for ${playlist.name}")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to load tracks for ${playlist.name}: ${e.message}")
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(application, "Failed to load tracks for ${playlist.name}, fam!", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }.awaitAll()
         }
+
+        // Ensure playlists is updated immutably
         playlists = playlists.toList()
     }
 
