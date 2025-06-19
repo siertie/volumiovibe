@@ -206,14 +206,12 @@ class SearchActivity : ComponentActivity() {
                 Spacer(modifier = Modifier.height(16.dp))
                 LazyColumn {
                     items(results) { track ->
+                        // specify at least one named arg other than 'track' so Kotlin picks the right overload
                         TrackItem(
                             track = track,
+                            index = null,        // <— disambiguates
                             actionButtons = {
-                                Button(onClick = {
-                                    coroutineScope.launch {
-                                        addToQueue(track)
-                                    }
-                                }) {
+                                Button(onClick = { coroutineScope.launch { addToQueue(track) } }) {
                                     Text("Add")
                                 }
                             }
