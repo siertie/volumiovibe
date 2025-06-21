@@ -189,29 +189,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     val newPlaylists = playlistNames.map { Playlist(it, pendingTracks[it] ?: emptyList()) }
                     playlists = newPlaylists
                     Log.d(TAG, "Updated playlists, old size: $oldSize, new size: ${playlists.size}, names: ${playlists.map { it.name }}")
-
-                    // Fetch tracks only for the first 3 visible playlists
-                    viewModelScope.launch {
-                        playlists.take(3).forEach { playlist ->
-                            if (playlist.name !in loadedPlaylists) {
-                                try {
-                                    val tracks = fetchTracksForPlaylist(playlist.name)
-                                    playlists = playlists.map { p ->
-                                        if (p.name == playlist.name) Playlist(p.name, tracks) else p
-                                    }
-                                    pendingTracks[playlist.name] = tracks.toMutableList()
-                                    loadedPlaylists.add(playlist.name)
-                                    Log.d(TAG, "Loaded ${tracks.size} tracks for ${playlist.name}")
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "Failed to load tracks for ${playlist.name}: ${e.message}")
-                                    withContext(Dispatchers.Main) {
-                                        Toast.makeText(application, "Failed to load tracks for ${playlist.name}, fam!", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            }
-                        }
-                        playlists = playlists.toList() // Force UI refresh
-                    }
+                    playlists = playlists.toList() // Force UI refresh
                 } catch (e: Exception) {
                     Log.e(TAG, "pushListPlaylist parse crashed: ${e.message}")
                 }
@@ -221,21 +199,25 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                 fetchPlaylists()
             }
             webSocketManager.on("pushAddToPlaylist") { args: Array<out Any> ->
-                Log.d(TAG, "Got pushAddToPlaylist: ${args[0]}")
+                Log.d(TAG, "Got pushAddToPlaylist: ${args.getOrNull(0)}")
                 try {
-                    val response = args[0] as JSONObject
-                    val playlistName = response.optString("name", "").trim()
-                    if (playlistName.isNotBlank()) {
-                        Log.d(TAG, "New track added to $playlistName, refreshing tracks")
-                        viewModelScope.launch {
-                            val tracks = fetchTracksForPlaylist(playlistName)
-                            playlists = playlists.map { playlist ->
-                                if (playlist.name == playlistName) Playlist(playlist.name, tracks) else playlist
+                    val response = args.getOrNull(0)
+                    if (response is JSONObject) {
+                        val playlistName = response.optString("name", "").trim()
+                        if (playlistName.isNotBlank()) {
+                            Log.d(TAG, "New track added to $playlistName, refreshing tracks")
+                            viewModelScope.launch {
+                                val tracks = fetchTracksForPlaylist(playlistName)
+                                playlists = playlists.map { playlist ->
+                                    if (playlist.name == playlistName) Playlist(playlist.name, tracks) else playlist
+                                }
+                                pendingTracks[playlistName] = tracks.toMutableList()
+                                loadedPlaylists.add(playlistName)
+                                Log.d("EXCLUDED_SONGS_DEBUG", "Tracks loaded for playlist after add: $playlistName")
                             }
-                            pendingTracks[playlistName] = tracks.toMutableList()
-                            loadedPlaylists.add(playlistName)
-                            Log.d("EXCLUDED_SONGS_DEBUG", "Tracks loaded for playlist after add: $playlistName")
                         }
+                    } else {
+                        Log.w(TAG, "pushAddToPlaylist: Null or invalid payload, skipping fetch")
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "pushAddToPlaylist parse failed: ${e.message}")
