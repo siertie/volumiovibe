@@ -85,7 +85,7 @@ fun PlaylistScreen(
 
     var showSheet by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var selectedPlaylistForSheet by remember { mutableStateOf<Playlist?>(null) }
+    var selectedPlaylistNameForSheet by remember { mutableStateOf<String?>(null) }
     var showDelete by remember { mutableStateOf<String?>(null) }
 
     // WebSocket connection feedback
@@ -126,7 +126,7 @@ fun PlaylistScreen(
             PlaylistsSection(
                 viewModel = viewModel,
                 onPlaylistTap = { playlist ->
-                    selectedPlaylistForSheet = playlist
+                    selectedPlaylistNameForSheet = playlist.name
                     if (playlist.tracks.isEmpty()) {
                         viewModel.browsePlaylistTracks(playlist.name)
                     }
@@ -138,18 +138,22 @@ fun PlaylistScreen(
     }
 
     // Bottom sheet for playlist details
-    if (selectedPlaylistForSheet != null) {
-        ModalBottomSheet(
-            sheetState = sheetState,
-            onDismissRequest = { selectedPlaylistForSheet = null }
-        ) {
-            PlaylistDetailSheet(
-                playlist = selectedPlaylistForSheet!!,
-                viewModel = viewModel,
-                onClose = { selectedPlaylistForSheet = null }
-            )
+    if (selectedPlaylistNameForSheet != null) {
+        val playlist = viewModel.playlists.firstOrNull { it.name == selectedPlaylistNameForSheet }
+        if (playlist != null) {
+            ModalBottomSheet(
+                sheetState = sheetState,
+                onDismissRequest = { selectedPlaylistNameForSheet = null }
+            ) {
+                PlaylistDetailSheet(
+                    playlist = playlist,
+                    viewModel = viewModel,
+                    onClose = { selectedPlaylistNameForSheet = null }
+                )
+            }
         }
     }
+
 
     // Bottom sheet for vibe setup
     if (showSheet) {
