@@ -25,7 +25,11 @@ import java.util.concurrent.ConcurrentHashMap
 class PlaylistViewModel(application: Application) : ViewModel() {
     private val TAG = "VIBE_DEBUG"
     private val webSocketManager = WebSocketManager
-    private val xAiApi = XAiApi(BuildConfig.XAI_API_KEY)
+//    private val xAiApi = XAiApi(BuildConfig.XAI_API_KEY)
+    init {
+        Log.d("OpenAiApi", "API KEY BEING USED: '${BuildConfig.OPENAI_API_KEY}'")
+    }
+    private val xAiApi = OpenAiApi(BuildConfig.OPENAI_API_KEY)
     private val prefs = application.getSharedPreferences("VolumioVibePrefs", Context.MODE_PRIVATE)
     private val application = application
 

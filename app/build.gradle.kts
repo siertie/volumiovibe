@@ -33,6 +33,7 @@ android {
             localProperties.load(localPropertiesFile.inputStream())
         }
         buildConfigField("String", "XAI_API_KEY", "\"${localProperties.getProperty("XAI_API_KEY", "")}\"")
+        buildConfigField("String", "OPENAI_API_KEY", "\"${localProperties.getProperty("OPENAI_API_KEY", "")}\"")
     }
 
     buildTypes {
