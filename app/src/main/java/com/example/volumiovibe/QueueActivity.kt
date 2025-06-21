@@ -56,7 +56,9 @@ class QueueActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         Log.d(TAG, "onResume: Checkin’ WebSocket")
-        WebSocketManager.reconnect()
+        if (!WebSocketManager.isConnected()) {
+            WebSocketManager.reconnect()
+        }
         refreshQueueCallback?.invoke()
     }
 

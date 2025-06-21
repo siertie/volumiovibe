@@ -122,8 +122,12 @@ object WebSocketManager {
         connectionListeners.forEach { it(isConnected) }
     }
 
+    private var reconnecting = false
+
     fun reconnect() {
-        if (!isConnected() && socket != null) {
+        // Only reconnect if not already connected or reconnecting
+        if (!isConnected() && socket != null && !reconnecting) {
+            reconnecting = true
             CoroutineScope(Dispatchers.IO).launch {
                 Log.d(TAG, "Tryna reconnect WebSocket")
                 var retries = 0
@@ -134,13 +138,18 @@ object WebSocketManager {
                         retries++
                     } else {
                         Log.d(TAG, "Reconnect worked, yo!")
-                        return@launch
+                        break
                     }
                 }
-                Log.e(TAG, "Reconnect failed after $retries tries, fam")
+                reconnecting = false
             }
+        } else if (reconnecting) {
+            Log.d(TAG, "Reconnect already in progress, skip")
+        } else if (isConnected()) {
+            Log.d(TAG, "WebSocket already connected, no need to reconnect")
         }
     }
+
 
     private fun getResponseEvent(event: String): String {
         return when (event) {
