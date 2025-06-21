@@ -190,6 +190,25 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     playlists = newPlaylists
                     Log.d(TAG, "Updated playlists, old size: $oldSize, new size: ${playlists.size}, names: ${playlists.map { it.name }}")
                     playlists = playlists.toList() // Force UI refresh
+
+                    // After updating playlists with names, fetch track counts in parallel (background)
+                    viewModelScope.launch {
+                        playlistNames.forEach { playlistName ->
+                            launch {
+                                if (playlistName !in loadedPlaylists) {
+                                    val tracks = fetchTracksForPlaylist(playlistName)
+                                    playlists = playlists.map { pl ->
+                                        if (pl.name == playlistName) Playlist(pl.name, tracks) else pl
+                                    }
+                                    pendingTracks[playlistName] = tracks.toMutableList()
+                                    loadedPlaylists.add(playlistName)
+                                    // Force UI update
+                                    playlists = playlists.toList()
+                                }
+                            }
+                        }
+                    }
+
                 } catch (e: Exception) {
                     Log.e(TAG, "pushListPlaylist parse crashed: ${e.message}")
                 }
