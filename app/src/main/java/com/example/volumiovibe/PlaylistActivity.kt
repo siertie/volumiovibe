@@ -1,9 +1,5 @@
-// PlaylistActivity.kt — Complete refactor with bottom‑sheet vibe editor & polished UI
-// Place this file in app/src/main/java/com/example/volumiovibe/PlaylistActivity.kt
-
 package com.example.volumiovibe
 
-// ──────────────────── IMPORTS ────────────────────
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -13,7 +9,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -90,7 +85,7 @@ fun PlaylistScreen(
 
     var showSheet by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var expandedPlaylist by remember { mutableStateOf<String?>(null) }
+    var selectedPlaylistForSheet by remember { mutableStateOf<Playlist?>(null) }
     var showDelete by remember { mutableStateOf<String?>(null) }
 
     // WebSocket connection feedback
@@ -130,10 +125,28 @@ fun PlaylistScreen(
         Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
             PlaylistsSection(
                 viewModel = viewModel,
-                expandedPlaylist = expandedPlaylist,
-                onPlaylistToggle = { expandedPlaylist = it },
+                onPlaylistTap = { playlist ->
+                    selectedPlaylistForSheet = playlist
+                    if (playlist.tracks.isEmpty()) {
+                        viewModel.browsePlaylistTracks(playlist.name)
+                    }
+                },
                 onDelete = { showDelete = it },
                 modifier = Modifier.weight(1f)
+            )
+        }
+    }
+
+    // Bottom sheet for playlist details
+    if (selectedPlaylistForSheet != null) {
+        ModalBottomSheet(
+            sheetState = sheetState,
+            onDismissRequest = { selectedPlaylistForSheet = null }
+        ) {
+            PlaylistDetailSheet(
+                playlist = selectedPlaylistForSheet!!,
+                viewModel = viewModel,
+                onClose = { selectedPlaylistForSheet = null }
             )
         }
     }
@@ -159,6 +172,122 @@ fun PlaylistScreen(
             },
             dismissButton = { TextButton(onClick = { showDelete = null }) { Text("Cancel") } }
         )
+    }
+}
+
+// ──────────────────── PLAYLIST SECTION ────────────────────
+
+@Composable
+fun PlaylistsSection(
+    viewModel: PlaylistViewModel,
+    onPlaylistTap: (Playlist) -> Unit,
+    onDelete: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(modifier = modifier) {
+        Column {
+            ListItem(headlineContent = { Text("Your Playlists") })
+            Divider()
+            when {
+                viewModel.isLoading -> Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                viewModel.playlists.isEmpty() -> Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) { Text("No playlists yet! Tap the + button to start.") }
+                else -> LazyColumn(Modifier.fillMaxWidth()) {
+                    items(viewModel.playlists) { playlist ->
+                        PlaylistItem(
+                            playlist = playlist,
+                            onTap = { onPlaylistTap(playlist) },
+                            onPlay = { viewModel.playPlaylist(playlist.name) },
+                            onDelete = { onDelete(playlist.name) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun PlaylistItem(
+    playlist: Playlist,
+    onTap: () -> Unit,
+    onPlay: () -> Unit,
+    onDelete: () -> Unit
+) {
+    Card(
+        Modifier
+            .padding(8.dp)
+            .clickable { onTap() }
+    ) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(painter = painterResource(id = R.drawable.ic_album), contentDescription = null)
+            Spacer(Modifier.width(16.dp))
+            Column(Modifier.weight(1f)) {
+                Text(playlist.name, style = MaterialTheme.typography.titleMedium)
+                Text("${playlist.tracks.size} tracks", style = MaterialTheme.typography.bodySmall)
+            }
+            IconButton(onClick = onPlay) { Icon(painter = painterResource(id = R.drawable.ic_play), contentDescription = "Play") }
+            IconButton(onClick = onDelete) { Icon(painter = painterResource(id = R.drawable.ic_delete), contentDescription = "Delete") }
+        }
+    }
+}
+
+// ──────────────────── PLAYLIST DETAIL SHEET ────────────────────
+
+@Composable
+fun PlaylistDetailSheet(
+    playlist: Playlist,
+    viewModel: PlaylistViewModel,
+    onClose: () -> Unit
+) {
+    val context = LocalContext.current
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Text(playlist.name, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            IconButton(onClick = onClose) { Icon(Icons.Default.Close, contentDescription = "Close") }
+        }
+        Text("${playlist.tracks.size} tracks", style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(12.dp))
+        Divider()
+        Spacer(Modifier.height(12.dp))
+        LazyColumn {
+            items(playlist.tracks) { track ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(painter = painterResource(id = R.drawable.ic_music_note), contentDescription = null)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(track.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(track.artist, style = MaterialTheme.typography.bodySmall)
+                    }
+                    IconButton(onClick = {
+                        viewModel.removeFromPlaylist(playlist.name, track.uri)
+                        Toast.makeText(context, "${track.title} removed", Toast.LENGTH_SHORT).show()
+                    }) {
+                        Icon(painter = painterResource(id = R.drawable.ic_delete), contentDescription = "Remove")
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            Button(onClick = { viewModel.playPlaylist(playlist.name) }) {
+                Icon(painter = painterResource(id = R.drawable.ic_play), contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Play")
+            }
+            // Add more buttons here if you want (like Shuffle)
+        }
     }
 }
 
@@ -303,94 +432,5 @@ fun DropdownSelector(
                 })
             }
         }
-    }
-}
-
-@Composable
-fun PlaylistsSection(
-    viewModel: PlaylistViewModel,
-    expandedPlaylist: String?,
-    onPlaylistToggle: (String?) -> Unit,
-    onDelete: (String) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Card(modifier = modifier) {
-        Column {
-            ListItem(headlineContent = { Text("Your Playlists") })
-            Divider()
-            when {
-                viewModel.isLoading -> Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-                viewModel.playlists.isEmpty() -> Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) { Text("No playlists yet! Tap the + button to start.") }
-                else -> LazyColumn(Modifier.fillMaxWidth()) {
-                    items(viewModel.playlists) { playlist ->
-                        PlaylistItem(
-                            playlist = playlist,
-                            isExpanded = expandedPlaylist == playlist.name,
-                            onToggle = {
-                                onPlaylistToggle(if (expandedPlaylist == playlist.name) null else playlist.name)
-                                if (expandedPlaylist != playlist.name && playlist.tracks.isEmpty()) viewModel.browsePlaylistTracks(playlist.name)
-                            },
-                            onPlay = { viewModel.playPlaylist(playlist.name) },
-                            onDelete = { onDelete(playlist.name) },
-                            viewModel = viewModel
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun PlaylistItem(
-    playlist: Playlist,
-    isExpanded: Boolean,
-    onToggle: () -> Unit,
-    onPlay: () -> Unit,
-    onDelete: () -> Unit,
-    viewModel: PlaylistViewModel
-) {
-    Card(Modifier.padding(8.dp).clickable { onToggle() }) {
-        Column {
-            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(painter = painterResource(id = R.drawable.ic_album), contentDescription = null)
-                Spacer(Modifier.width(16.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(playlist.name, style = MaterialTheme.typography.titleMedium)
-                    Text("${playlist.tracks.size} tracks", style = MaterialTheme.typography.bodySmall)
-                }
-                IconButton(onClick = onPlay) { Icon(painter = painterResource(id = R.drawable.ic_play), contentDescription = "Play") }
-                IconButton(onClick = onDelete) { Icon(painter = painterResource(id = R.drawable.ic_delete), contentDescription = "Delete") }
-            }
-            if (isExpanded) TrackList(playlist.tracks, playlist.name, viewModel)
-        }
-    }
-}
-
-@Composable
-fun TrackList(tracks: List<Track>, playlistName: String, viewModel: PlaylistViewModel) {
-    val context = LocalContext.current
-    LazyColumn {
-        itemsIndexed(tracks) { _, track ->
-            TrackItem(track = track) {
-                IconButton(onClick = {
-                    viewModel.removeFromPlaylist(playlistName, track.uri)
-                    Toast.makeText(context, "${track.title} removed", Toast.LENGTH_SHORT).show()
-                }) { Icon(painter = painterResource(id = R.drawable.ic_delete), contentDescription = "Remove") }
-            }
-        }
-    }
-}
-
-@Composable
-fun TrackItem(track: Track, actionButtons: @Composable () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(painter = painterResource(id = R.drawable.ic_music_note), contentDescription = null)
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(track.title, style = MaterialTheme.typography.bodyLarge)
-            Text(track.artist, style = MaterialTheme.typography.bodySmall)
-        }
-        actionButtons()
     }
 }
