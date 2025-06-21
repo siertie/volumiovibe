@@ -31,6 +31,10 @@ import kotlinx.coroutines.withContext
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import com.example.volumiovibe.TrackItem
+import androidx.compose.foundation.lazy.itemsIndexed
+
+
 
 // ──────────────────── DOMAIN MODELS ────────────────────
 
@@ -258,26 +262,20 @@ fun PlaylistDetailSheet(
         Divider()
         Spacer(Modifier.height(12.dp))
         LazyColumn {
-            items(playlist.tracks) { track ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(painter = painterResource(id = R.drawable.ic_music_note), contentDescription = null)
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(track.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(track.artist, style = MaterialTheme.typography.bodySmall)
+            itemsIndexed(playlist.tracks) { index, track ->
+                TrackItem(
+                    track = track,
+                    index = index,
+                    onClick = null, // Or provide a callback if you want!
+                    actionButtons = {
+                        IconButton(onClick = {
+                            viewModel.removeFromPlaylist(playlist.name, track.uri)
+                            Toast.makeText(context, "${track.title} removed", Toast.LENGTH_SHORT).show()
+                        }) {
+                            Icon(painter = painterResource(id = R.drawable.ic_delete), contentDescription = "Remove")
+                        }
                     }
-                    IconButton(onClick = {
-                        viewModel.removeFromPlaylist(playlist.name, track.uri)
-                        Toast.makeText(context, "${track.title} removed", Toast.LENGTH_SHORT).show()
-                    }) {
-                        Icon(painter = painterResource(id = R.drawable.ic_delete), contentDescription = "Remove")
-                    }
-                }
+                )
             }
         }
         Spacer(Modifier.height(16.dp))
