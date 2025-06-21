@@ -32,14 +32,17 @@ class QueueActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         var keepSplash = true
         installSplashScreen().setKeepOnScreenCondition { keepSplash }
-        CoroutineScope(Dispatchers.Main).launch {
+        CoroutineScope(Dispatchers.IO).launch {
             WebSocketManager.initialize()
-            if (WebSocketManager.waitForConnection()) {
-                Log.d(TAG, "WebSocket connected, yo!")
-            } else {
-                Log.e(TAG, "WebSocket failed, fam")
+            val connected = WebSocketManager.waitForConnection()
+            withContext(Dispatchers.Main) {
+                if (connected) {
+                    Log.d(TAG, "WebSocket connected, yo!")
+                } else {
+                    Log.e(TAG, "WebSocket failed, fam")
+                }
+                keepSplash = false
             }
-            keepSplash = false
         }
         setContent {
             var themeMode by remember { mutableStateOf(ThemeMode.SYSTEM) }
@@ -87,25 +90,16 @@ class QueueActivity : ComponentActivity() {
         LaunchedEffect(Unit) {
             onRefreshCallback {
                 coroutineScope.launch {
-                    if (WebSocketManager.waitForConnection()) {
+                    val connected = withContext(Dispatchers.IO) {
+                        WebSocketManager.waitForConnection()
+                    }
+                    if (connected) {
                         fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
                     } else {
                         withContext(Dispatchers.Main) {
                             Toast.makeText(context, "WebSocket dead, fam! Tryna reconnect.", Toast.LENGTH_SHORT).show()
                         }
                         WebSocketManager.reconnect()
-                    }
-                }
-            }
-            WebSocketManager.onConnectionChange { isConnected ->
-                coroutineScope.launch {
-                    withContext(Dispatchers.Main) {
-                        if (!isConnected) {
-                            Toast.makeText(context, "WebSocket dropped, fam! Reconnectin’...", Toast.LENGTH_SHORT).show()
-                            WebSocketManager.reconnect()
-                        } else {
-                            Toast.makeText(context, "WebSocket connected, yo!", Toast.LENGTH_SHORT).show()
-                        }
                     }
                 }
             }
