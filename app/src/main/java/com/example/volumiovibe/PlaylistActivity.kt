@@ -98,6 +98,10 @@ fun PlaylistScreen(
             coroutineScope.launch {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, if (connected) "WebSocket up 🚀" else "WebSocket down ❌", Toast.LENGTH_SHORT).show()
+                    if (connected) {
+                        // 🟢 Reload playlists when socket comes back!
+                        viewModel.fetchPlaylists()
+                    }
                     if (!connected) WebSocketManager.reconnect()
                 }
             }

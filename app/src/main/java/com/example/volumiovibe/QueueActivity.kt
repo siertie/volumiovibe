@@ -59,11 +59,14 @@ class QueueActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         Log.d(TAG, "onResume: Checkin’ WebSocket")
-        if (!WebSocketManager.isConnected()) {
+        if (WebSocketManager.isConnected()) {
+            WebSocketManager.emit("getState")
+        } else {
             WebSocketManager.reconnect()
         }
         refreshQueueCallback?.invoke()
     }
+
 
     override fun onDestroy() {
         super.onDestroy()
@@ -77,15 +80,9 @@ class QueueActivity : ComponentActivity() {
         onThemeModeChange: (ThemeMode) -> Unit
     ) {
         var queue by remember { mutableStateOf<List<Track>>(emptyList()) }
-        var statusText by remember { mutableStateOf("Volumio Status: connectin’...") }
-        var seekPosition by remember { mutableStateOf(0f) }
-        var trackDuration by remember { mutableStateOf(1f) }
-        var isPlaying by remember { mutableStateOf(false) }
-        var currentTrackUri by remember { mutableStateOf("") }
-        var tickJob by remember { mutableStateOf<Job?>(null) }
-        var ignoreSeekUpdates by remember { mutableStateOf(false) }
         val coroutineScope = rememberCoroutineScope()
         val context = LocalContext.current
+
 
         LaunchedEffect(Unit) {
             onRefreshCallback {
@@ -103,45 +100,6 @@ class QueueActivity : ComponentActivity() {
                     }
                 }
             }
-            WebSocketManager.on("pushState") { args ->
-                try {
-                    val state = args[0] as? JSONObject ?: return@on
-                    val status = state.getString("status")
-                    val title = state.optString("title", "Nothin’ playin’")
-                    val artist = state.optString("artist", "")
-                    val seek = state.optLong("seek", -1).toFloat() / 1000f
-                    val duration = state.optLong("duration", 1).toFloat().coerceAtLeast(1f)
-                    val uri = state.optString("uri", "")
-                    tickJob?.cancel()
-                    val isTrackChange = uri != currentTrackUri && uri.isNotEmpty()
-                    if (isTrackChange) {
-                        currentTrackUri = uri
-                        seekPosition = 0f
-                    }
-                    isPlaying = (status == "play")
-                    if (!ignoreSeekUpdates && (seek >= 0f || isTrackChange)) {
-                        seekPosition = if (seek >= 0f) seek else 0f
-                    }
-                    trackDuration = duration
-                    statusText = "Volumio Status: $status\nNow Playin’: $title by $artist"
-                    if (isPlaying) {
-                        tickJob = coroutineScope.launch {
-                            while (isActive && isPlaying && seekPosition < trackDuration) {
-                                delay(1000)
-                                if (isPlaying && seekPosition < trackDuration) {
-                                    seekPosition += 1f
-                                }
-                            }
-                            if (seekPosition >= trackDuration) {
-                                isPlaying = false
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Push state error: $e")
-                    statusText = "Volumio Status: error - $e"
-                }
-            }
             // Wait for connection and fetch queue/state
             if (WebSocketManager.waitForConnection()) {
                 WebSocketManager.emit("getState")
@@ -153,49 +111,9 @@ class QueueActivity : ComponentActivity() {
                 WebSocketManager.reconnect()
             }
         }
-
-        DisposableEffect(Unit) {
-            onDispose {
-                tickJob?.cancel()
-            }
-        }
-
         Scaffold(
             bottomBar = {
-                PlayerControls(
-                    statusText = statusText,
-                    seekPosition = seekPosition,
-                    trackDuration = trackDuration,
-                    isPlaying = isPlaying,
-                    onPlay = {
-                        coroutineScope.launch { Common.sendCommand(context, "play") }
-                    },
-                    onPause = {
-                        coroutineScope.launch { Common.sendCommand(context, "pause") }
-                    },
-                    onNext = {
-                        coroutineScope.launch { Common.sendCommand(context, "next") }
-                    },
-                    onPrevious = {
-                        coroutineScope.launch { Common.sendCommand(context, "prev") }
-                    },
-                    onSeek = { newValue ->
-                        seekPosition = newValue
-                        coroutineScope.launch {
-                            val seekSeconds = newValue.toInt()
-                            ignoreSeekUpdates = true
-                            WebSocketManager.emit("pause")
-                            delay(500)
-                            WebSocketManager.emit("seek", seekSeconds)
-                            delay(500)
-                            WebSocketManager.emit("play")
-                            delay(4000)
-                            ignoreSeekUpdates = false
-                            delay(1000)
-                            WebSocketManager.emit("getState")
-                        }
-                    }
-                )
+                NowPlayingBar()
             }
         ) { padding ->
             Column(
