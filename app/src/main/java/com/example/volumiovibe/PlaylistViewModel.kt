@@ -448,22 +448,22 @@ class PlaylistViewModel(application: Application) : ViewModel() {
     }
 
     suspend fun fetchAllPlaylistTracks() {
-        // Explicit type for playlistsToFetch
+        // Only fetch for playlists not already loaded
         val playlistsToFetch: List<Playlist> = playlists.filter { it.name !in loadedPlaylists }
-        Log.d(TAG, "Fetchin’ tracks for ${playlistsToFetch.size} playlists in parallel")
+        Log.d(TAG, "Fetchin’ tracks for ${playlistsToFetch.size} playlists in parallel (BATCH UPDATE MODE)")
 
-        // Use coroutineScope to manage async tasks
+        // Temporary map to batch results
+        val tracksByPlaylist = mutableMapOf<String, List<Track>>()
+
         coroutineScope {
-            playlistsToFetch.map { playlist: Playlist ->
+            playlistsToFetch.map { playlist ->
                 async(Dispatchers.IO) {
                     try {
-                        val tracks: List<Track> = fetchTracksForPlaylist(playlist.name)
-                        playlists = playlists.map { p ->
-                            if (p.name == playlist.name) Playlist(p.name, tracks) else p
-                        }
+                        val tracks = fetchTracksForPlaylist(playlist.name)
+                        tracksByPlaylist[playlist.name] = tracks
                         pendingTracks[playlist.name] = tracks.toMutableList()
                         loadedPlaylists.add(playlist.name)
-                        Log.d(TAG, "Loaded ${tracks.size} tracks for ${playlist.name}")
+                        Log.d(TAG, "Loaded ${tracks.size} tracks for ${playlist.name} (batch)")
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to load tracks for ${playlist.name}: ${e.message}")
                         withContext(Dispatchers.Main) {
@@ -474,9 +474,16 @@ class PlaylistViewModel(application: Application) : ViewModel() {
             }.awaitAll()
         }
 
-        // Ensure playlists is updated immutably
-        playlists = playlists.toList()
+        // Batch update all playlists in one go
+        playlists = playlists.map { playlist ->
+            if (tracksByPlaylist.containsKey(playlist.name))
+                Playlist(playlist.name, tracksByPlaylist[playlist.name] ?: emptyList())
+            else
+                playlist
+        }.toList()
+        Log.d(TAG, "Batch playlists update complete: ${playlists.map { it.name to it.tracks.size }}")
     }
+
 
     fun browsePlaylistTracks(playlistName: String) {
         val trimmedPlaylistName = playlistName.trim()
