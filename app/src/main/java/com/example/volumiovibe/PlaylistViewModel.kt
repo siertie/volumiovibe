@@ -362,9 +362,9 @@ class PlaylistViewModel(application: Application) : ViewModel() {
         Log.d(TAG, "Emittin’ listPlaylist to server")
         webSocketManager.emit("listPlaylist", JSONObject())
         viewModelScope.launch {
-            delay(3000)
             isLoading = false
             Log.d(TAG, "Playlist fetch done, got ${playlists.size} playlists: ${playlists.map { it.name }}")
+            delay(1000)
             if (playlists.isEmpty()) {
                 Log.w(TAG, "No playlists loaded, fam")
                 withContext(Dispatchers.Main) {
