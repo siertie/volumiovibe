@@ -93,62 +93,55 @@ fun NowPlayingBar(
         }
     }
 
-    if (playerReady) {
-        PlayerControls(
-            statusText = statusText,
-            seekPosition = seekPosition,
-            trackDuration = trackDuration,
-            isPlaying = isPlaying,
-            onPlay = {
-                coroutineScope.launch {
-                    Common.sendCommand(context, "play")
-                    delay(300) // optional, lets the backend process
-                    WebSocketManager.emit("getState")
-                }
-            },
-            onPause = {
-                coroutineScope.launch {
-                    Common.sendCommand(context, "pause")
-                    delay(300)
-                    WebSocketManager.emit("getState")
-                }
-            },
-            onNext = {
-                coroutineScope.launch {
-                    Common.sendCommand(context, "next")
-                    delay(300)
-                    WebSocketManager.emit("getState")
-                }
-            },
-            onPrevious = {
-                coroutineScope.launch {
-                    Common.sendCommand(context, "prev")
-                    delay(300)
-                    WebSocketManager.emit("getState")
-                }
-            },
-            onSeek = { newValue ->
-                seekPosition = newValue
-                coroutineScope.launch {
+    PlayerControls(
+        statusText = statusText,
+        seekPosition = seekPosition,
+        trackDuration = trackDuration,
+        isPlaying = isPlaying,
+        onPlay = {
+            if (playerReady) {
+                coroutineScope.launch { Common.sendCommand(context, "play"); WebSocketManager.emit("getState") }
+            } else {
+                Toast.makeText(context, "Yo, player ain't ready!", Toast.LENGTH_SHORT).show()
+            }
+        },
+        onPause = {
+            if (playerReady) {
+                coroutineScope.launch { Common.sendCommand(context, "pause"); WebSocketManager.emit("getState") }
+            } else {
+                Toast.makeText(context, "Yo, player ain't ready!", Toast.LENGTH_SHORT).show()
+            }
+        },
+        onNext = {
+            if (playerReady) {
+                coroutineScope.launch { Common.sendCommand(context, "next"); WebSocketManager.emit("getState") }
+            } else {
+                Toast.makeText(context, "Yo, player ain't ready!", Toast.LENGTH_SHORT).show()
+            }
+        },
+        onPrevious = {
+            if (playerReady) {
+                coroutineScope.launch { Common.sendCommand(context, "prev"); WebSocketManager.emit("getState") }
+            } else {
+                Toast.makeText(context, "Yo, player ain't ready!", Toast.LENGTH_SHORT).show()
+            }
+        },
+        onSeek = { newValue ->
+            seekPosition = newValue
+            coroutineScope.launch {
+                if (playerReady) {
                     val seekSeconds = newValue.toInt()
                     ignoreSeekUpdates = true
                     WebSocketManager.emit("seek", seekSeconds)
-//                    delay(500) // can tweak
                     ignoreSeekUpdates = false
                     WebSocketManager.emit("getState")
+                } else {
+                    Toast.makeText(context, "Yo, player ain't ready!", Toast.LENGTH_SHORT).show()
                 }
-            },
-            modifier = modifier
-        )
-    } else {
-        Box(
-            modifier = modifier
-                .fillMaxWidth()
-                .height(88.dp)
-                .padding(8.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            CircularProgressIndicator()
-        }
-    }
+            }
+        },
+        modifier = modifier,
+        controlsEnabled = playerReady,
+        disabledReason = if (!playerReady) "Yo, no track loaded or player disconnected!" else null
+    )
 }

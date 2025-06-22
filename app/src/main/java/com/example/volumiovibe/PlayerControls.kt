@@ -1,5 +1,6 @@
 package com.example.volumiovibe
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,12 +22,13 @@ fun PlayerControls(
     onNext: () -> Unit,
     onPrevious: () -> Unit,
     onSeek: (Float) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    controlsEnabled: Boolean = true,
+    disabledReason: String? = null
 ) {
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    // Format time like in MainActivity
     fun formatTime(seconds: Float): String {
         val mins = (seconds / 60).toInt()
         val secs = (seconds % 60).toInt()
@@ -53,9 +55,11 @@ fun PlayerControls(
             Slider(
                 value = seekPosition,
                 onValueChange = { newValue ->
-                    onSeek(newValue)
+                    if (controlsEnabled) onSeek(newValue)
+                    else disabledReason?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
                 },
                 valueRange = 0f..trackDuration.coerceAtLeast(1f),
+                enabled = controlsEnabled,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp)
@@ -68,13 +72,26 @@ fun PlayerControls(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                IconButton(onClick = onPrevious) {
+                IconButton(
+                    onClick = {
+                        if (controlsEnabled) onPrevious()
+                        else disabledReason?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+                    },
+                    enabled = controlsEnabled
+                ) {
                     Icon(
                         painter = painterResource(id = android.R.drawable.ic_media_previous),
                         contentDescription = "Previous"
                     )
                 }
-                IconButton(onClick = if (isPlaying) onPause else onPlay) {
+                IconButton(
+                    onClick = {
+                        if (controlsEnabled) {
+                            if (isPlaying) onPause() else onPlay()
+                        } else disabledReason?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+                    },
+                    enabled = controlsEnabled
+                ) {
                     Icon(
                         painter = painterResource(
                             id = if (isPlaying) android.R.drawable.ic_media_pause
@@ -83,7 +100,13 @@ fun PlayerControls(
                         contentDescription = if (isPlaying) "Pause" else "Play"
                     )
                 }
-                IconButton(onClick = onNext) {
+                IconButton(
+                    onClick = {
+                        if (controlsEnabled) onNext()
+                        else disabledReason?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+                    },
+                    enabled = controlsEnabled
+                ) {
                     Icon(
                         painter = painterResource(id = android.R.drawable.ic_media_next),
                         contentDescription = "Next"
