@@ -23,6 +23,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.Dispatchers.Main
 import org.json.JSONArray
 import org.json.JSONObject
+import androidx.lifecycle.ViewModelProvider
 
 class QueueActivity : ComponentActivity() {
     private val TAG = "VolumioQueueActivity"
@@ -30,28 +31,41 @@ class QueueActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val TAG = "VolumioQueueActivity"
         var keepSplash = true
         installSplashScreen().setKeepOnScreenCondition { keepSplash }
+
+        // First, initialize WebSocketManager and wait for connection BEFORE creating ViewModel or Compose UI
         CoroutineScope(Dispatchers.IO).launch {
             WebSocketManager.initialize()
             val connected = WebSocketManager.waitForConnection()
             withContext(Dispatchers.Main) {
+                keepSplash = false
+
                 if (connected) {
                     Log.d(TAG, "WebSocket connected, yo!")
                 } else {
                     Log.e(TAG, "WebSocket failed, fam")
                 }
-                keepSplash = false
-            }
-        }
-        setContent {
-            var themeMode by remember { mutableStateOf(ThemeMode.SYSTEM) }
-            AppTheme(themeMode = themeMode) {
-                QueueScreen(
-                    onRefreshCallback = { refreshQueueCallback = it },
-                    themeMode = themeMode,
-                    onThemeModeChange = { newMode -> themeMode = newMode }
-                )
+
+                // Now it's SAFE to construct ViewModel
+                val playerViewModel = ViewModelProvider(
+                    this@QueueActivity,
+                    ViewModelProvider.AndroidViewModelFactory.getInstance(application)
+                ).get(PlayerViewModel::class.java)
+
+                // Set up the Compose UI tree
+                setContent {
+                    var themeMode by remember { mutableStateOf(ThemeMode.SYSTEM) }
+                    AppTheme(themeMode = themeMode) {
+                        QueueScreen(
+                            onRefreshCallback = { refreshQueueCallback = it },
+                            themeMode = themeMode,
+                            onThemeModeChange = { newMode -> themeMode = newMode },
+                            playerViewModel = playerViewModel
+                        )
+                    }
+                }
             }
         }
     }
@@ -67,7 +81,6 @@ class QueueActivity : ComponentActivity() {
         refreshQueueCallback?.invoke()
     }
 
-
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "onDestroy: Activity dead, isFinishing=$isFinishing")
@@ -77,12 +90,12 @@ class QueueActivity : ComponentActivity() {
     fun QueueScreen(
         onRefreshCallback: (() -> Unit) -> Unit,
         themeMode: ThemeMode,
-        onThemeModeChange: (ThemeMode) -> Unit
+        onThemeModeChange: (ThemeMode) -> Unit,
+        playerViewModel: PlayerViewModel
     ) {
         var queue by remember { mutableStateOf<List<Track>>(emptyList()) }
         val coroutineScope = rememberCoroutineScope()
         val context = LocalContext.current
-
 
         LaunchedEffect(Unit) {
             onRefreshCallback {
@@ -113,7 +126,7 @@ class QueueActivity : ComponentActivity() {
         }
         Scaffold(
             bottomBar = {
-                NowPlayingBar()
+                NowPlayingBar(playerViewModel = playerViewModel)
             }
         ) { padding ->
             Column(
