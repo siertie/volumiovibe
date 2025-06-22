@@ -100,30 +100,41 @@ fun NowPlayingBar(
             trackDuration = trackDuration,
             isPlaying = isPlaying,
             onPlay = {
-                coroutineScope.launch { Common.sendCommand(context, "play") }
+                coroutineScope.launch {
+                    Common.sendCommand(context, "play")
+                    delay(300) // optional, lets the backend process
+                    WebSocketManager.emit("getState")
+                }
             },
             onPause = {
-                coroutineScope.launch { Common.sendCommand(context, "pause") }
+                coroutineScope.launch {
+                    Common.sendCommand(context, "pause")
+                    delay(300)
+                    WebSocketManager.emit("getState")
+                }
             },
             onNext = {
-                coroutineScope.launch { Common.sendCommand(context, "next") }
+                coroutineScope.launch {
+                    Common.sendCommand(context, "next")
+                    delay(300)
+                    WebSocketManager.emit("getState")
+                }
             },
             onPrevious = {
-                coroutineScope.launch { Common.sendCommand(context, "prev") }
+                coroutineScope.launch {
+                    Common.sendCommand(context, "prev")
+                    delay(300)
+                    WebSocketManager.emit("getState")
+                }
             },
             onSeek = { newValue ->
                 seekPosition = newValue
                 coroutineScope.launch {
                     val seekSeconds = newValue.toInt()
                     ignoreSeekUpdates = true
-                    WebSocketManager.emit("pause")
-                    delay(500)
                     WebSocketManager.emit("seek", seekSeconds)
-                    delay(500)
-                    WebSocketManager.emit("play")
-                    delay(4000)
+//                    delay(500) // can tweak
                     ignoreSeekUpdates = false
-                    delay(1000)
                     WebSocketManager.emit("getState")
                 }
             },
