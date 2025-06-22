@@ -47,6 +47,7 @@ class QueueActivity : ComponentActivity() {
                 } else {
                     Log.e(TAG, "WebSocket failed, fam")
                 }
+                WebSocketManager.emit("getState")
 
                 // Now it's SAFE to construct ViewModel
                 val playerViewModel = ViewModelProvider(

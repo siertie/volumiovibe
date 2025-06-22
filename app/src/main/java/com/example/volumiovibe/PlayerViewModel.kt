@@ -59,6 +59,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     init {
+        WebSocketManager.emit("getState")
         WebSocketManager.onConnectionChange { isConnected ->
             viewModelScope.launch {
                 if (!isConnected) {

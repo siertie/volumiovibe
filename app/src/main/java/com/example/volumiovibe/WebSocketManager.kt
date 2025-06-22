@@ -27,9 +27,9 @@ object WebSocketManager {
             val opts = IO.Options().apply {
                 forceNew = true
                 reconnection = true
-                reconnectionAttempts = 10
-                reconnectionDelay = 1000
-                reconnectionDelayMax = 10000
+                reconnectionAttempts = 20
+                reconnectionDelay = 500
+                reconnectionDelayMax = 2000
                 transports = arrayOf("websocket")
                 query = "EIO=3"
             }

@@ -18,9 +18,7 @@ suspend fun runPlayerCommandWithSync(
 ) {
     playerViewModel.maybeReconnectIfStale()
     command()
-    WebSocketManager.emit("getState")
-    delay(1000)
-    WebSocketManager.emit("getState")
+    WebSocketManager.emit("getState") // Just once, no waiting!
 }
 
 @Composable
