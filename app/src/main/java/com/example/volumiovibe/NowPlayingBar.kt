@@ -99,44 +99,79 @@ fun NowPlayingBar(
         trackDuration = trackDuration,
         isPlaying = isPlaying,
         onPlay = {
-            if (playerReady) {
-                coroutineScope.launch { Common.sendCommand(context, "play"); WebSocketManager.emit("getState") }
-            } else {
-                Toast.makeText(context, "Yo, player ain't ready!", Toast.LENGTH_SHORT).show()
+            when {
+                !WebSocketManager.isConnected() -> {
+                    Toast.makeText(context, "WebSocket dead, fam! Tryna reconnect...", Toast.LENGTH_SHORT).show()
+                    WebSocketManager.reconnect()
+                }
+                !playerReady -> {
+                    Toast.makeText(context, "Yo, player ain't ready!", Toast.LENGTH_SHORT).show()
+                }
+                else -> {
+                    coroutineScope.launch { Common.sendCommand(context, "play"); WebSocketManager.emit("getState") }
+                }
             }
         },
         onPause = {
-            if (playerReady) {
-                coroutineScope.launch { Common.sendCommand(context, "pause"); WebSocketManager.emit("getState") }
-            } else {
-                Toast.makeText(context, "Yo, player ain't ready!", Toast.LENGTH_SHORT).show()
+            when {
+                !WebSocketManager.isConnected() -> {
+                    Toast.makeText(context, "WebSocket dead, fam! Tryna reconnect...", Toast.LENGTH_SHORT).show()
+                    WebSocketManager.reconnect()
+                }
+                !playerReady -> {
+                    Toast.makeText(context, "Yo, player ain't ready!", Toast.LENGTH_SHORT).show()
+                }
+                else -> {
+                    coroutineScope.launch { Common.sendCommand(context, "pause"); WebSocketManager.emit("getState") }
+                }
             }
         },
         onNext = {
-            if (playerReady) {
-                coroutineScope.launch { Common.sendCommand(context, "next"); WebSocketManager.emit("getState") }
-            } else {
-                Toast.makeText(context, "Yo, player ain't ready!", Toast.LENGTH_SHORT).show()
+            when {
+                !WebSocketManager.isConnected() -> {
+                    Toast.makeText(context, "WebSocket dead, fam! Tryna reconnect...", Toast.LENGTH_SHORT).show()
+                    WebSocketManager.reconnect()
+                }
+                !playerReady -> {
+                    Toast.makeText(context, "Yo, player ain't ready!", Toast.LENGTH_SHORT).show()
+                }
+                else -> {
+                    coroutineScope.launch { Common.sendCommand(context, "next"); WebSocketManager.emit("getState") }
+                }
             }
         },
         onPrevious = {
-            if (playerReady) {
-                coroutineScope.launch { Common.sendCommand(context, "prev"); WebSocketManager.emit("getState") }
-            } else {
-                Toast.makeText(context, "Yo, player ain't ready!", Toast.LENGTH_SHORT).show()
+            when {
+                !WebSocketManager.isConnected() -> {
+                    Toast.makeText(context, "WebSocket dead, fam! Tryna reconnect...", Toast.LENGTH_SHORT).show()
+                    WebSocketManager.reconnect()
+                }
+                !playerReady -> {
+                    Toast.makeText(context, "Yo, player ain't ready!", Toast.LENGTH_SHORT).show()
+                }
+                else -> {
+                    coroutineScope.launch { Common.sendCommand(context, "prev"); WebSocketManager.emit("getState") }
+                }
             }
         },
         onSeek = { newValue ->
             seekPosition = newValue
             coroutineScope.launch {
-                if (playerReady) {
-                    val seekSeconds = newValue.toInt()
-                    ignoreSeekUpdates = true
-                    WebSocketManager.emit("seek", seekSeconds)
-                    ignoreSeekUpdates = false
-                    WebSocketManager.emit("getState")
-                } else {
-                    Toast.makeText(context, "Yo, player ain't ready!", Toast.LENGTH_SHORT).show()
+                when {
+                    !WebSocketManager.isConnected() -> {
+                        Toast.makeText(context, "WebSocket dead, fam! Tryna reconnect...", Toast.LENGTH_SHORT).show()
+                        WebSocketManager.reconnect()
+                    }
+                    !playerReady -> {
+                        Toast.makeText(context, "Yo, player ain't ready!", Toast.LENGTH_SHORT).show()
+                    }
+                    else -> {
+                        val seekSeconds = newValue.toInt()
+                        ignoreSeekUpdates = true
+                        WebSocketManager.emit("seek", seekSeconds)
+                        ignoreSeekUpdates = false
+                        WebSocketManager.emit("getState")
+                    }
                 }
             }
         },
