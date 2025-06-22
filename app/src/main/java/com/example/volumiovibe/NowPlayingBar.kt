@@ -8,8 +8,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.*
-import org.json.JSONObject
 import androidx.compose.ui.unit.dp
+
+// --- DRY Helper ---
+suspend fun runPlayerCommandWithSync(
+    context: android.content.Context,
+    playerViewModel: PlayerViewModel,
+    command: suspend () -> Unit
+) {
+    playerViewModel.maybeReconnectIfStale()
+    command()
+    WebSocketManager.emit("getState")
+    delay(1000)
+    WebSocketManager.emit("getState")
+}
 
 @Composable
 fun NowPlayingBar(
@@ -41,8 +53,9 @@ fun NowPlayingBar(
                 }
                 else -> {
                     coroutineScope.launch {
-                        Common.sendCommand(context, "play")
-                        WebSocketManager.emit("getState")
+                        runPlayerCommandWithSync(context, playerViewModel) {
+                            Common.sendCommand(context, "play")
+                        }
                     }
                 }
             }
@@ -58,8 +71,9 @@ fun NowPlayingBar(
                 }
                 else -> {
                     coroutineScope.launch {
-                        Common.sendCommand(context, "pause")
-                        WebSocketManager.emit("getState")
+                        runPlayerCommandWithSync(context, playerViewModel) {
+                            Common.sendCommand(context, "pause")
+                        }
                     }
                 }
             }
@@ -75,8 +89,9 @@ fun NowPlayingBar(
                 }
                 else -> {
                     coroutineScope.launch {
-                        Common.sendCommand(context, "next")
-                        WebSocketManager.emit("getState")
+                        runPlayerCommandWithSync(context, playerViewModel) {
+                            Common.sendCommand(context, "next")
+                        }
                     }
                 }
             }
@@ -92,8 +107,9 @@ fun NowPlayingBar(
                 }
                 else -> {
                     coroutineScope.launch {
-                        Common.sendCommand(context, "prev")
-                        WebSocketManager.emit("getState")
+                        runPlayerCommandWithSync(context, playerViewModel) {
+                            Common.sendCommand(context, "prev")
+                        }
                     }
                 }
             }
@@ -109,8 +125,9 @@ fun NowPlayingBar(
                         Toast.makeText(context, "Yo, player ain't ready!", Toast.LENGTH_SHORT).show()
                     }
                     else -> {
-                        WebSocketManager.emit("seek", newValue.toInt())
-                        WebSocketManager.emit("getState")
+                        runPlayerCommandWithSync(context, playerViewModel) {
+                            WebSocketManager.emit("seek", newValue.toInt())
+                        }
                     }
                 }
             }
@@ -120,4 +137,3 @@ fun NowPlayingBar(
         disabledReason = if (!playerReady) "Yo, no track loaded or player disconnected!" else null
     )
 }
-

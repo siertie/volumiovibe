@@ -77,6 +77,16 @@ class QueueActivity : ComponentActivity() {
             WebSocketManager.emit("getState")
         } else {
             WebSocketManager.reconnect()
+            // Wait briefly, then force getState. This helps after a reconnect delay.
+            CoroutineScope(Dispatchers.Main).launch {
+                repeat(3) { // Try up to 3 times
+                    delay(800)
+                    if (WebSocketManager.isConnected()) {
+                        WebSocketManager.emit("getState")
+                        return@launch
+                    }
+                }
+            }
         }
         refreshQueueCallback?.invoke()
     }

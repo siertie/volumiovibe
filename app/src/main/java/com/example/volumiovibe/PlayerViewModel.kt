@@ -22,6 +22,23 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     var currentTrackUri by mutableStateOf("")
     var playerReady by mutableStateOf(false)
 
+    var lastPushStateTime by mutableStateOf(System.currentTimeMillis())
+
+    fun maybeReconnectIfStale() {
+        val now = System.currentTimeMillis()
+        if (now - lastPushStateTime > 10_000) { // 10 seconds
+            WebSocketManager.reconnect()
+            CoroutineScope(Dispatchers.Main).launch {
+                repeat(3) {
+                    delay(800)
+                    if (WebSocketManager.isConnected()) {
+                        WebSocketManager.emit("getState")
+                        return@launch
+                    }
+                }
+            }
+        }
+    }
     // For ticking the seekbar/timer
     private var tickJob: Job? = null
 
@@ -64,6 +81,7 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                     val duration = state.optLong("duration", 1).toFloat().coerceAtLeast(1f)
                     val uri = state.optString("uri", "")
                     val isTrackChange = uri != currentTrackUri && uri.isNotEmpty()
+                    lastPushStateTime = System.currentTimeMillis()
                     if (isTrackChange) {
                         currentTrackUri = uri
                         seekPosition = 0f
