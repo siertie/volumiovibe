@@ -30,6 +30,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlin.math.roundToInt
+import androidx.compose.foundation.shape.RoundedCornerShape
+
 
 
 private fun setDevice(
@@ -62,10 +64,73 @@ private fun setDevice(
     })
 }
 
+fun dbToPercent(db: Float): Int {
+    return ((db + 100) / 100f * 100).toInt().coerceIn(0, 100)
+}
+
+fun percentToDb(percent: Int): Float {
+    return (percent / 100f) * 100f - 100f
+}
+
+@Composable
+fun SelectableChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    FilterChip(
+        selected,           // Boolean (selected)
+        onClick,            // () -> Unit
+        { Text(label) },    // @Composable label
+        Modifier,           // Modifier
+        true,               // Boolean (enabled)
+        colors = FilterChipDefaults.filterChipColors(
+            selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f),
+            selectedLabelColor = MaterialTheme.colorScheme.primary,
+            containerColor = Color.Transparent,
+            labelColor = MaterialTheme.colorScheme.onSurface
+        ),
+        border = FilterChipDefaults.filterChipBorder(
+            selected, // required
+            true,     // required, always enabled for you
+            borderColor = MaterialTheme.colorScheme.outline,
+            selectedBorderColor = MaterialTheme.colorScheme.primary,
+            borderWidth = 1.dp,
+            selectedBorderWidth = 2.dp
+        )
+    )
+}
+
+
 class NanoDigiActivity : ComponentActivity() {
     private val TAG = "NanoDigiActivity"
     private val DEBUG_TAG = "NanoDigiDebug"
     private val client = OkHttpClient()
+
+    private fun fetchDevice(
+        scope: CoroutineScope,
+        context: android.content.Context,
+        onDeviceReceived: (String) -> Unit
+    ) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val request = Request.Builder()
+                    .url("http://192.168.0.250:8080/get_device")
+                    .get()
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    val responseBody = response.body?.string()?.trim() ?: ""
+                    if (response.isSuccessful && responseBody.startsWith("hw:")) {
+                        withContext(Dispatchers.Main) {
+                            onDeviceReceived(responseBody)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // Optionally handle errors here
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,44 +141,63 @@ class NanoDigiActivity : ComponentActivity() {
             var volume by remember { mutableStateOf(-37f) }
             var mute by remember { mutableStateOf(false) }
             var output by remember { mutableStateOf("Shield TV") }
+            val outputMap = mapOf(
+                "hw:sndrpihifiberry,0,0" to "Shield TV",
+                "hw:Loopback,1,0" to "Volumio"
+            )
+            val reverseOutputMap = outputMap.entries.associate { it.value to it.key }
             val coroutineScope = rememberCoroutineScope()
             val context = LocalContext.current
+
+            // ---- SYNC ALL STATE FROM BACKEND ----
+            LaunchedEffect(Unit) {
+                // Fetch *all* state from /devices/0
+                fetchState(coroutineScope, context) { newConfig, newSource, newVolume, newMute ->
+                    config = newConfig
+                    source = newSource
+                    volume = newVolume
+                    mute = newMute
+                }
+                // Fetch the current output device
+                fetchDevice(coroutineScope, context) { deviceStr ->
+                    output = outputMap[deviceStr] ?: "Shield TV"
+                }
+            }
+            // --------------------------------------
 
             AppTheme(themeMode = themeMode) {
                 NanoDigiRemoteScreen(
                     themeMode = themeMode,
                     onThemeModeChange = { newMode -> themeMode = newMode },
-
                     config = config,
                     onConfigSelected = {
                         config = it
                         sendConfig(coroutineScope, context, preset = it)
                     },
-
                     source = source,
                     onSourceSelected = {
                         source = it
                         sendConfig(coroutineScope, context, source = it)
                     },
-
                     volume = volume,
                     onVolumeChange = { volume = it },
-
                     mute = mute,
                     onMuteToggle = {
                         mute = !mute
                         sendConfig(coroutineScope, context, mute = mute)
                     },
-
                     output = output,
                     onOutputSelected = { out ->
-                        output = out
-                        val dev = when (out) {
-                            "Shield TV" -> "hw:sndrpihifiberry,0,0"
-                            "Volumio" -> "hw:Loopback,1,0"
-                            else -> "hw:sndrpihifiberry,0,0"
-                        }
+                        output = out  // Optimistic UI update
+                        val dev = reverseOutputMap[out] ?: "hw:sndrpihifiberry,0,0"
                         setDevice(dev, context)
+                        // Delay fetch to allow backend to update (250ms is usually enough)
+                        coroutineScope.launch {
+                            delay(250)
+                            fetchDevice(coroutineScope, context) { deviceStr ->
+                                output = outputMap[deviceStr] ?: "Shield TV"
+                            }
+                        }
                     },
                     sendConfig = { v -> sendConfig(coroutineScope, context, volume = v) }
                 )
@@ -179,10 +263,10 @@ class NanoDigiActivity : ComponentActivity() {
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             (0..3).forEach { idx ->
-                                FilterChip(
+                                SelectableChip(
+                                    label = "${idx + 1}",
                                     selected = config == idx,
-                                    onClick = { onConfigSelected(idx) },
-                                    label = { Text("${idx + 1}") }
+                                    onClick = { onConfigSelected(idx) }
                                 )
                             }
                         }
@@ -201,10 +285,10 @@ class NanoDigiActivity : ComponentActivity() {
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             listOf("Toslink", "Spdif").forEach { src ->
-                                FilterChip(
+                                SelectableChip(
+                                    label = src,
                                     selected = source == src,
-                                    onClick = { onSourceSelected(src) },
-                                    label = { Text(src) }
+                                    onClick = { onSourceSelected(src) }
                                 )
                             }
                         }
@@ -223,10 +307,10 @@ class NanoDigiActivity : ComponentActivity() {
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             listOf("Shield TV", "Volumio").forEach { out ->
-                                FilterChip(
+                                SelectableChip(
+                                    label = out,
                                     selected = output == out,
-                                    onClick = { onOutputSelected(out) },
-                                    label = { Text(out) }
+                                    onClick = { onOutputSelected(out) }
                                 )
                             }
                         }
@@ -282,8 +366,7 @@ class NanoDigiActivity : ComponentActivity() {
                         thumbRadius = 16.dp
                     )
                 }
-
-                Text("${volume.toInt()} dB", style = MaterialTheme.typography.labelSmall)
+                Text("${dbToPercent(volume)}% (${volume.toInt()} dB)", style = MaterialTheme.typography.labelSmall)
             }
         }
 
@@ -335,6 +418,8 @@ class NanoDigiActivity : ComponentActivity() {
         thumbRadius: Dp = 16.dp
     ) {
         val density = LocalDensity.current
+        var isDragging by remember { mutableStateOf(false) }
+        var dragValue by remember { mutableStateOf(value) }
 
         BoxWithConstraints(
             modifier = Modifier
@@ -345,10 +430,8 @@ class NanoDigiActivity : ComponentActivity() {
             val sliderHeightPx = with(density) { maxHeight.toPx() }
             val sliderStart = with(density) { thumbRadius.toPx() }
             val sliderEnd = sliderHeightPx - sliderStart
-            val valuePercent = (value - valueRange.start) / (valueRange.endInclusive - valueRange.start)
+            val valuePercent = (if (isDragging) dragValue else value - valueRange.start) / (valueRange.endInclusive - valueRange.start)
             val thumbY = sliderEnd - valuePercent * (sliderEnd - sliderStart)
-
-            var isDragging by remember { mutableStateOf(false) }
 
             Canvas(
                 modifier = Modifier
@@ -372,8 +455,8 @@ class NanoDigiActivity : ComponentActivity() {
                                         .roundToInt()
                                         .toFloat() * (valueRange.endInclusive - valueRange.start) / steps
                                     ) + valueRange.start
-
-                            onValueChange(stepped.coerceIn(valueRange.start, valueRange.endInclusive))
+                            dragValue = stepped.coerceIn(valueRange.start, valueRange.endInclusive)
+                            onValueChange(dragValue)
                         }
                     }
             ) {
@@ -389,8 +472,31 @@ class NanoDigiActivity : ComponentActivity() {
                     center = Offset(size.width / 2f, thumbY)
                 )
             }
+
+            // --- Floating label while dragging ---
+            if (isDragging) {
+                Box(
+                    modifier = Modifier
+                        .offset(y = with(density) { thumbY.toDp() - 28.dp }) // adjust -28.dp for label height
+                        .align(Alignment.Center)
+                ) {
+                    Surface(
+                        shadowElevation = 4.dp,
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.padding(4.dp)
+                    ) {
+                        Text(
+                            "${dbToPercent(dragValue)}% (${dragValue.toInt()} dB)",
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                    }
+                }
+            }
         }
     }
+
 
     private fun sendConfig(
         scope: CoroutineScope,
