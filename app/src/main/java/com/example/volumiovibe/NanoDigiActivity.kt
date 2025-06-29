@@ -22,6 +22,15 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlin.math.roundToInt
+
 
 private fun setDevice(
     device: String,
@@ -62,238 +71,323 @@ class NanoDigiActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             var themeMode by remember { mutableStateOf(ThemeMode.SYSTEM) }
+            var config by remember { mutableStateOf(3) }
+            var source by remember { mutableStateOf("Toslink") }
+            var volume by remember { mutableStateOf(-37f) }
+            var mute by remember { mutableStateOf(false) }
+            var output by remember { mutableStateOf("Shield TV") }
+            val coroutineScope = rememberCoroutineScope()
+            val context = LocalContext.current
+
             AppTheme(themeMode = themeMode) {
-                NanoDigiScreen(
+                NanoDigiRemoteScreen(
                     themeMode = themeMode,
-                    onThemeModeChange = { newMode -> themeMode = newMode }
+                    onThemeModeChange = { newMode -> themeMode = newMode },
+
+                    config = config,
+                    onConfigSelected = {
+                        config = it
+                        sendConfig(coroutineScope, context, preset = it)
+                    },
+
+                    source = source,
+                    onSourceSelected = {
+                        source = it
+                        sendConfig(coroutineScope, context, source = it)
+                    },
+
+                    volume = volume,
+                    onVolumeChange = { volume = it },
+
+                    mute = mute,
+                    onMuteToggle = {
+                        mute = !mute
+                        sendConfig(coroutineScope, context, mute = mute)
+                    },
+
+                    output = output,
+                    onOutputSelected = { out ->
+                        output = out
+                        val dev = when (out) {
+                            "Shield TV" -> "hw:sndrpihifiberry,0,0"
+                            "Volumio" -> "hw:Loopback,1,0"
+                            else -> "hw:sndrpihifiberry,0,0"
+                        }
+                        setDevice(dev, context)
+                    },
+                    sendConfig = { v -> sendConfig(coroutineScope, context, volume = v) }
                 )
             }
         }
     }
 
     @Composable
-    fun NanoDigiScreen(
+    fun NanoDigiRemoteScreen(
         themeMode: ThemeMode,
-        onThemeModeChange: (ThemeMode) -> Unit
+        onThemeModeChange: (ThemeMode) -> Unit,
+        config: Int,
+        onConfigSelected: (Int) -> Unit,
+        source: String,
+        onSourceSelected: (String) -> Unit,
+        volume: Float,
+        onVolumeChange: (Float) -> Unit,
+        mute: Boolean,
+        onMuteToggle: () -> Unit,
+        output: String,
+        onOutputSelected: (String) -> Unit,
+        sendConfig: (Float) -> Unit, // expects: sendConfig(volume)
     ) {
-        val coroutineScope = rememberCoroutineScope()
-        val context = LocalContext.current
-        var config by remember { mutableStateOf(3) } // 0-3 internally, shown as 1-4
-        var source by remember { mutableStateOf("Toslink") }
-        var volume by remember { mutableStateOf(-37f) }
-        var mute by remember { mutableStateOf(false) }
+        // Dialog state for volume confirmation
+        var showVolumeDialog by remember { mutableStateOf(false) }
+        var pendingVolume by remember { mutableStateOf(volume) }
+        var previousVolume by remember { mutableStateOf(volume) }
 
-        LaunchedEffect(Unit) {
-            fetchState(coroutineScope, context) { newConfig, newSource, newVolume, newMute ->
-                config = newConfig
-                source = newSource
-                volume = newVolume
-                mute = newMute
-            }
-        }
-
-        Scaffold { padding ->
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp)
+        ) {
+            // --- Controls: All Cards on the Left ---
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .padding(16.dp),
+                    .weight(1f)
+                    .fillMaxHeight(),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                // --- Top Bar ---
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "nanoDIGI Control",
+                        text = "nanoDIGI Remote",
                         style = MaterialTheme.typography.headlineMedium,
                         color = MaterialTheme.colorScheme.primary
                     )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = if (themeMode == ThemeMode.DARK) "Dark" else "Light",
-                            color = MaterialTheme.colorScheme.onSurface,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Switch(
-                            checked = themeMode == ThemeMode.DARK,
-                            onCheckedChange = {
-                                onThemeModeChange(if (it) ThemeMode.DARK else ThemeMode.LIGHT)
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = MaterialTheme.colorScheme.primary,
-                                checkedTrackColor = MaterialTheme.colorScheme.primaryContainer,
-                                uncheckedThumbColor = MaterialTheme.colorScheme.onSurface,
-                                uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        )
-                    }
                 }
+
                 Spacer(modifier = Modifier.height(16.dp))
-                Text("Config: ${config + 1}", style = MaterialTheme.typography.bodyLarge)
-                Row(
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    modifier = Modifier.fillMaxWidth()
+
+                // --- Preset Card ---
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    elevation = CardDefaults.cardElevation()
                 ) {
-                    Button(
-                        onClick = {
-                            config = 0
-                            sendConfig(coroutineScope, context, preset = config)
-                        },
-                        enabled = config != 0,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.secondary,
-                            contentColor = MaterialTheme.colorScheme.onSecondary
-                        )
-                    ) {
-                        Text("1")
-                    }
-                    Button(
-                        onClick = {
-                            config = 1
-                            sendConfig(coroutineScope, context, preset = config)
-                        },
-                        enabled = config != 1,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.secondary,
-                            contentColor = MaterialTheme.colorScheme.onSecondary
-                        )
-                    ) {
-                        Text("2")
-                    }
-                    Button(
-                        onClick = {
-                            config = 2
-                            sendConfig(coroutineScope, context, preset = config)
-                        },
-                        enabled = config != 2,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.secondary,
-                            contentColor = MaterialTheme.colorScheme.onSecondary
-                        )
-                    ) {
-                        Text("3")
-                    }
-                    Button(
-                        onClick = {
-                            config = 3
-                            sendConfig(coroutineScope, context, preset = config)
-                        },
-                        enabled = config != 3,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.secondary,
-                            contentColor = MaterialTheme.colorScheme.onSecondary
-                        )
-                    ) {
-                        Text("4")
+                    Column(Modifier.padding(16.dp)) {
+                        Text("Preset", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            (0..3).forEach { idx ->
+                                FilterChip(
+                                    selected = config == idx,
+                                    onClick = { onConfigSelected(idx) },
+                                    label = { Text("${idx + 1}") }
+                                )
+                            }
+                        }
                     }
                 }
+
                 Spacer(modifier = Modifier.height(16.dp))
-                Text("Source: $source", style = MaterialTheme.typography.bodyLarge)
-                Row {
-                    Button(
-                        onClick = {
-                            source = "Toslink"
-                            sendConfig(coroutineScope, context, source = source)
-                        },
-                        enabled = source != "Toslink",
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.secondary,
-                            contentColor = MaterialTheme.colorScheme.onSecondary
-                        )
-                    ) {
-                        Text("Toslink")
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Button(
-                        onClick = {
-                            source = "Spdif"
-                            sendConfig(coroutineScope, context, source = source)
-                        },
-                        enabled = source != "Spdif",
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.secondary,
-                            contentColor = MaterialTheme.colorScheme.onSecondary
-                        )
-                    ) {
-                        Text("Spdif")
+
+                // --- Source Card ---
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    elevation = CardDefaults.cardElevation()
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("Source", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("Toslink", "Spdif").forEach { src ->
+                                FilterChip(
+                                    selected = source == src,
+                                    onClick = { onSourceSelected(src) },
+                                    label = { Text(src) }
+                                )
+                            }
+                        }
                     }
                 }
+
                 Spacer(modifier = Modifier.height(16.dp))
-                Text(
-                    text = "Volume: ${volume.toInt()} dB",
-                    style = MaterialTheme.typography.bodyLarge
-                )
-                Slider(
-                    value = volume,
-                    onValueChange = { newValue ->
-                        volume = newValue.toInt().toFloat() // Snap to whole dB
-                    },
-                    onValueChangeFinished = {
-                        sendConfig(coroutineScope, context, volume = volume)
-                    },
-                    valueRange = -100f..0f,
-                    steps = 99, // 100 steps for -100 to 0 dB
-                    colors = SliderDefaults.colors(
-                        thumbColor = MaterialTheme.colorScheme.primary,
-                        activeTrackColor = MaterialTheme.colorScheme.primary,
-                        inactiveTrackColor = MaterialTheme.colorScheme.secondary
-                    ),
-                    modifier = Modifier.fillMaxWidth()
-                )
+
+                // --- Output Card ---
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    elevation = CardDefaults.cardElevation()
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("Output", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("Shield TV", "Volumio").forEach { out ->
+                                FilterChip(
+                                    selected = output == out,
+                                    onClick = { onOutputSelected(out) },
+                                    label = { Text(out) }
+                                )
+                            }
+                        }
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(16.dp))
-                Text("Mute: ${if (mute) "On" else "Off"}", style = MaterialTheme.typography.bodyLarge)
+
+                // --- Mute Button ---
                 Button(
-                    onClick = {
-                        mute = !mute
-                        sendConfig(coroutineScope, context, mute = mute)
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.secondary,
-                        contentColor = MaterialTheme.colorScheme.onSecondary
-                    )
+                    onClick = { onMuteToggle() },
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
                 ) {
                     Text(if (mute) "Unmute" else "Mute")
                 }
+            }
 
-                // Spacer so the buttons aren’t cramped
-                Spacer(modifier = Modifier.height(16.dp))
+            // --- Vertical Volume Slider, Right Side ---
+            Column(
+                modifier = Modifier
+                    .width(80.dp)
+                    .fillMaxHeight(),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("Vol", style = MaterialTheme.typography.labelSmall)
 
-// Two config buttons for CamillaDSP
-                Row(
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                    modifier = Modifier.fillMaxWidth()
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight(0.75f)
+                        .padding(vertical = 8.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    val context = LocalContext.current
+                    VerticalVolumeSlider(
+                        value = volume,
+                        valueRange = -100f..0f,
+                        steps = 99,
+                        onValueChange = { newVol ->
+                            onVolumeChange(newVol)
+                            pendingVolume = newVol // Always reflect the slider position
+                        },
+                        onValueChangeFinished = {
+                            if (pendingVolume > -20f) {
+                                showVolumeDialog = true
+                            } else {
+                                sendConfig(pendingVolume)
+                                previousVolume = pendingVolume
+                            }
+                        },
+                        trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f),
+                        thumbColor = MaterialTheme.colorScheme.primary,
+                        trackWidth = 8.dp,
+                        thumbRadius = 16.dp
+                    )
+                }
 
+                Text("${volume.toInt()} dB", style = MaterialTheme.typography.labelSmall)
+            }
+        }
+
+        // --- Confirmation Dialog ---
+        if (showVolumeDialog) {
+            AlertDialog(
+                onDismissRequest = {
+                    showVolumeDialog = false
+                    onVolumeChange(previousVolume)
+                },
+                title = { Text("Are you sure?") },
+                text = { Text("Volume will be set at ${pendingVolume.toInt()} dB") },
+                // Cancel first, styled as filled Button
+                dismissButton = {
                     Button(
                         onClick = {
-                            setDevice("hw:sndrpihifiberry,0,0", context)
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
-                        )
+                            showVolumeDialog = false
+                            onVolumeChange(previousVolume)
+                        }
                     ) {
-                        Text("Shield TV")
+                        Text("Cancel")
                     }
-
-                    Spacer(modifier = Modifier.width(16.dp))
-
-                    Button(
-                        onClick = {
-                            setDevice("hw:Loopback,1,0", context)
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
-                        )
-                    ) {
-                        Text("Volumio")
+                },
+                // Confirm second, styled as plain TextButton
+                confirmButton = {
+                    TextButton(onClick = {
+                        sendConfig(pendingVolume)
+                        previousVolume = pendingVolume
+                        showVolumeDialog = false
+                    }) {
+                        Text("Yes, set volume")
                     }
                 }
+            )
+        }
+    }
+
+
+    @Composable
+    fun VerticalVolumeSlider(
+        value: Float,
+        valueRange: ClosedFloatingPointRange<Float>,
+        steps: Int,
+        onValueChange: (Float) -> Unit,
+        onValueChangeFinished: () -> Unit,
+        trackColor: Color,
+        thumbColor: Color,
+        trackWidth: Dp = 8.dp,
+        thumbRadius: Dp = 16.dp
+    ) {
+        val density = LocalDensity.current
+
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxHeight()
+                .width(48.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            val sliderHeightPx = with(density) { maxHeight.toPx() }
+            val sliderStart = with(density) { thumbRadius.toPx() }
+            val sliderEnd = sliderHeightPx - sliderStart
+            val valuePercent = (value - valueRange.start) / (valueRange.endInclusive - valueRange.start)
+            val thumbY = sliderEnd - valuePercent * (sliderEnd - sliderStart)
+
+            var isDragging by remember { mutableStateOf(false) }
+
+            Canvas(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(48.dp)
+                    .pointerInput(Unit) {
+                        detectVerticalDragGestures(
+                            onDragEnd = {
+                                isDragging = false
+                                onValueChangeFinished()
+                            },
+                            onDragStart = {
+                                isDragging = true
+                            }
+                        ) { change, _ ->
+                            val newY = change.position.y.coerceIn(sliderStart, sliderEnd)
+                            val percent = 1f - ((newY - sliderStart) / (sliderEnd - sliderStart))
+                            val newValue = valueRange.start + percent * (valueRange.endInclusive - valueRange.start)
+                            val stepped = (
+                                    ((newValue - valueRange.start) * steps / (valueRange.endInclusive - valueRange.start))
+                                        .roundToInt()
+                                        .toFloat() * (valueRange.endInclusive - valueRange.start) / steps
+                                    ) + valueRange.start
+
+                            onValueChange(stepped.coerceIn(valueRange.start, valueRange.endInclusive))
+                        }
+                    }
+            ) {
+                drawLine(
+                    color = trackColor,
+                    strokeWidth = with(density) { trackWidth.toPx() },
+                    start = Offset(size.width / 2f, sliderStart),
+                    end = Offset(size.width / 2f, sliderEnd)
+                )
+                drawCircle(
+                    color = thumbColor,
+                    radius = with(density) { thumbRadius.toPx() },
+                    center = Offset(size.width / 2f, thumbY)
+                )
             }
         }
     }
