@@ -23,7 +23,7 @@ import okhttp3.*
 import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
-    private val volumioUrl = "http://volumio.local:3000"
+    private val volumioUrl = "http://192.168.0.250:3000"
     private val client = OkHttpClient()
     private val TAG = "VolumioMainActivity"
 

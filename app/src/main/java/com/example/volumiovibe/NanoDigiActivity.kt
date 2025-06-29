@@ -1,6 +1,8 @@
 package com.example.volumiovibe
 
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -19,6 +21,37 @@ import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import androidx.compose.runtime.Composable
+
+private fun setDevice(
+    device: String,
+    context: android.content.Context
+) {
+    val client = OkHttpClient()
+    val url = "http://192.168.0.250:8080/set_device?name=$device"
+    val request = Request.Builder()
+        .get()
+        .url(url)
+        .build()
+
+    client.newCall(request).enqueue(object : okhttp3.Callback {
+        override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(context, "Set device failed: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+        override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
+            val body = response.body?.string()
+            Handler(Looper.getMainLooper()).post {
+                if (response.isSuccessful) {
+                    Toast.makeText(context, "Device set: $body", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "Set failed: $body", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    })
+}
 
 class NanoDigiActivity : ComponentActivity() {
     private val TAG = "NanoDigiActivity"
@@ -224,6 +257,43 @@ class NanoDigiActivity : ComponentActivity() {
                 ) {
                     Text(if (mute) "Unmute" else "Mute")
                 }
+
+                // Spacer so the buttons aren’t cramped
+                Spacer(modifier = Modifier.height(16.dp))
+
+// Two config buttons for CamillaDSP
+                Row(
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    val context = LocalContext.current
+
+                    Button(
+                        onClick = {
+                            setDevice("hw:sndrpihifiberry,0,0", context)
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        )
+                    ) {
+                        Text("Shield TV")
+                    }
+
+                    Spacer(modifier = Modifier.width(16.dp))
+
+                    Button(
+                        onClick = {
+                            setDevice("hw:Loopback,1,0", context)
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        )
+                    ) {
+                        Text("Volumio")
+                    }
+                }
             }
         }
     }
@@ -251,7 +321,7 @@ class NanoDigiActivity : ComponentActivity() {
                 Log.d(DEBUG_TAG, "Sendin’ POST payload: $json")
                 val body = json.toString().toRequestBody("application/json".toMediaType())
                 val request = Request.Builder()
-                    .url("http://volumio.local:5380/devices/0/config")
+                    .url("http://192.168.0.250:5380/devices/0/config")
                     .post(body)
                     .build()
 
@@ -287,7 +357,7 @@ class NanoDigiActivity : ComponentActivity() {
         scope.launch(Dispatchers.IO) {
             try {
                 val request = Request.Builder()
-                    .url("http://volumio.local:5380/devices/0")
+                    .url("http://192.168.0.250:5380/devices/0")
                     .get()
                     .build()
 

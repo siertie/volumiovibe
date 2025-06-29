@@ -11,7 +11,7 @@ import org.json.JSONObject
 import java.net.URISyntaxException
 
 object WebSocketManager {
-    private const val volumioUrl = "http://volumio.local:3000"
+    private const val volumioUrl = "http://192.168.0.250:3000"
     private var socket: Socket? = null
     private var isInitialized = false
     private var isConnected = false
