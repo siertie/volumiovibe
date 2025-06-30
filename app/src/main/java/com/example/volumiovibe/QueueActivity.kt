@@ -132,13 +132,30 @@ class QueueActivity : BaseActivity() {
                 TopAppBar(
                     title = { Text("Queue", style = MaterialTheme.typography.headlineSmall) },
                     actions = {
+                        IconButton(onClick = {
+                            context.startActivity(Intent(context, SearchActivity::class.java).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                            })
+                        }) {
+                            Icon(painterResource(id = android.R.drawable.ic_menu_search), contentDescription = "Search")
+                        }
+
+                        IconButton(onClick = {
+                            context.startActivity(Intent(context, PlaylistActivity::class.java))
+                        }) {
+                            Icon(painterResource(id = android.R.drawable.ic_menu_agenda), contentDescription = "Playlist")
+                        }
+
+                        IconButton(onClick = {
+                            context.startActivity(Intent(context, NanoDigiActivity::class.java))
+                        }) {
+                            Icon(painterResource(id = android.R.drawable.ic_menu_manage), contentDescription = "nanoDIGI")
+                        }
+
+                        // Only "Clear Queue" in menu
                         var expanded by remember { mutableStateOf(false) }
                         IconButton(onClick = { expanded = true }) {
-                            Icon(
-                                imageVector = Icons.Default.MoreVert,
-                                contentDescription = "More",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
+                            Icon(imageVector = Icons.Default.MoreVert, contentDescription = "More", tint = MaterialTheme.colorScheme.primary)
                         }
                         DropdownMenu(
                             expanded = expanded,
@@ -154,36 +171,14 @@ class QueueActivity : BaseActivity() {
                                     }
                                 }
                             )
-                            DropdownMenuItem(
-                                text = { Text("Search") },
-                                onClick = {
-                                    expanded = false
-                                    context.startActivity(Intent(context, SearchActivity::class.java).apply {
-                                        addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                                    })
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Playlist") },
-                                onClick = {
-                                    expanded = false
-                                    context.startActivity(Intent(context, PlaylistActivity::class.java))
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("nanoDIGI") },
-                                onClick = {
-                                    expanded = false
-                                    context.startActivity(Intent(context, NanoDigiActivity::class.java))
-                                }
-                            )
                         }
                     }
                 )
             },
             bottomBar = {
                 NowPlayingBar(playerViewModel = playerViewModel)
-            }
+            },
+            contentWindowInsets = WindowInsets.systemBars
         ) { padding ->
             LazyColumn(
                 modifier = Modifier
