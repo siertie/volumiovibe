@@ -9,6 +9,12 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Book
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SettingsRemote
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -16,34 +22,26 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.draw.shadow
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import com.example.volumiovibe.ui.theme.AppTheme
-import com.example.volumiovibe.ui.theme.ThemeMode
+import androidx.lifecycle.ViewModelProvider
 import kotlinx.coroutines.*
 import kotlinx.coroutines.Dispatchers.Main
 import org.json.JSONArray
 import org.json.JSONObject
-import androidx.lifecycle.ViewModelProvider
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Book
-import androidx.compose.material.icons.filled.SettingsRemote
-import androidx.compose.material.icons.filled.Search // For search icon
-//import androidx.compose.material.icons.filled.PlaylistPlay // For playlist icon (option 1)
-import androidx.compose.material.icons.automirrored.filled.PlaylistPlay // Updated for playlist
-import androidx.compose.material.icons.filled.MoreVert // For menu
-import androidx.compose.ui.draw.shadow
-
+import com.example.volumiovibe.ui.theme.AppTheme
+import com.example.volumiovibe.ui.theme.ThemeMode
 @OptIn(ExperimentalMaterial3Api::class)
 
 class QueueActivity : BaseActivity() {
     private val TAG = "VolumioQueueActivity"
     private var refreshQueueCallback: (() -> Unit)? = null
     private lateinit var playerViewModel: PlayerViewModel
+    private var queueState = mutableStateOf<List<Track>>(emptyList())
+    private var keepSplash = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        var keepSplash = true
         installSplashScreen().setKeepOnScreenCondition { keepSplash }
 
         CoroutineScope(Dispatchers.IO).launch {
@@ -53,10 +51,12 @@ class QueueActivity : BaseActivity() {
                 if (connected) {
                     Log.d(TAG, "WebSocket connected, yo!")
                     WebSocketManager.emit("getState")
+
                     playerViewModel = ViewModelProvider(
                         this@QueueActivity,
                         ViewModelProvider.AndroidViewModelFactory.getInstance(application)
                     ).get(PlayerViewModel::class.java)
+
                     setContent {
                         AppTheme(themeMode = ThemeMode.SYSTEM) {
                             QueueScreen(
@@ -67,18 +67,7 @@ class QueueActivity : BaseActivity() {
                     }
                 } else {
                     Log.e(TAG, "WebSocket failed, fam")
-                    setContent {
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            Text("No connection, fam!")
-                            Button(onClick = { WebSocketManager.reconnectNow() }) {
-                                Text("Retry")
-                            }
-                        }
-                    }
+                    showNoConnectionUI()
                 }
             }
         }
@@ -93,11 +82,6 @@ class QueueActivity : BaseActivity() {
             Log.w(TAG, "onResume: playerViewModel not initialized yet")
         }
         refreshQueueCallback?.invoke()
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        Log.d(TAG, "onDestroy: Activity dead, isFinishing=$isFinishing")
     }
 
     @Composable
@@ -118,7 +102,7 @@ class QueueActivity : BaseActivity() {
                     if (connected) {
                         fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
                     } else {
-                        withContext(Dispatchers.Main) {
+                        withContext(Main) {
                             Toast.makeText(context, "WebSocket dead, fam! Tryna reconnect.", Toast.LENGTH_SHORT).show()
                         }
                         WebSocketManager.reconnect()
@@ -129,7 +113,7 @@ class QueueActivity : BaseActivity() {
                 WebSocketManager.emit("getState")
                 fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
             } else {
-                withContext(Dispatchers.Main) {
+                withContext(Main) {
                     Toast.makeText(context, "WebSocket dead, fam! Reconnectin’...", Toast.LENGTH_SHORT).show()
                 }
                 WebSocketManager.reconnect()
@@ -141,71 +125,42 @@ class QueueActivity : BaseActivity() {
                 TopAppBar(
                     title = { Text("Queue", style = MaterialTheme.typography.headlineSmall) },
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh // or Highest
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
                     ),
-                    modifier = Modifier.shadow(4.dp), // optional: match player’s elevation
+                    modifier = Modifier.shadow(4.dp),
                     actions = {
                         IconButton(onClick = {
-                            context.startActivity(Intent(context, SearchActivity::class.java).apply {
-                                addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                            })
+                            context.startActivity(Intent(context, SearchActivity::class.java))
                         }) {
-                            Icon(
-                                imageVector = Icons.Default.Search, // Material Search icon, matches style
-                                contentDescription = "Search",
-                                tint = MaterialTheme.colorScheme.onSurface // Theme-based, no colors
-                            )
+                            Icon(Icons.Default.Search, contentDescription = "Search")
                         }
-
                         IconButton(onClick = {
                             context.startActivity(Intent(context, PlaylistActivity::class.java))
                         }) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.PlaylistPlay, // Clearer playlist icon
-                                contentDescription = "Playlist",
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
+                            Icon(Icons.AutoMirrored.Filled.PlaylistPlay, contentDescription = "Playlist")
                         }
-
                         IconButton(onClick = {
                             context.startActivity(Intent(context, NanoDigiActivity::class.java))
                         }) {
-                            Icon(
-                                imageVector = Icons.Default.SettingsRemote, // Keepin’ the sick remote icon
-                                contentDescription = "nanoDIGI",
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
+                            Icon(Icons.Default.SettingsRemote, contentDescription = "nanoDIGI")
                         }
-
                         var expanded by remember { mutableStateOf(false) }
                         IconButton(onClick = { expanded = true }) {
-                            Icon(
-                                imageVector = Icons.Default.MoreVert,
-                                contentDescription = "More",
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
+                            Icon(Icons.Default.MoreVert, contentDescription = "More")
                         }
-                        DropdownMenu(
-                            expanded = expanded,
-                            onDismissRequest = { expanded = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Clear Queue") },
-                                onClick = {
-                                    expanded = false
-                                    coroutineScope.launch {
-                                        clearQueue(coroutineScope)
-                                        fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
-                                    }
+                        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                            DropdownMenuItem(text = { Text("Clear Queue") }, onClick = {
+                                expanded = false
+                                coroutineScope.launch {
+                                    clearQueue(coroutineScope)
+                                    fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
                                 }
-                            )
+                            })
                         }
                     }
                 )
             },
-            bottomBar = {
-                NowPlayingBar(playerViewModel = playerViewModel)
-            },
+            bottomBar = { NowPlayingBar(playerViewModel = playerViewModel) },
             contentWindowInsets = WindowInsets.systemBars
         ) { padding ->
             LazyColumn(
@@ -214,10 +169,7 @@ class QueueActivity : BaseActivity() {
                     .padding(padding)
                     .padding(horizontal = 16.dp)
             ) {
-                itemsIndexed(
-                    items = queue,
-                    key = { index, track -> "${track.uri}_$index" }
-                ) { index, track ->
+                itemsIndexed(queue, key = { index, track -> "${track.uri}_$index" }) { index, track ->
                     TrackItem(
                         track = track,
                         index = index,
@@ -235,11 +187,7 @@ class QueueActivity : BaseActivity() {
                                         fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
                                     }
                                 }) {
-                                    Icon(
-                                        painter = painterResource(id = android.R.drawable.arrow_up_float),
-                                        contentDescription = "Move Up",
-                                        tint = MaterialTheme.colorScheme.secondary
-                                    )
+                                    Icon(painter = painterResource(id = android.R.drawable.arrow_up_float), contentDescription = "Move Up")
                                 }
                             }
                             if (index < queue.size - 1) {
@@ -249,11 +197,7 @@ class QueueActivity : BaseActivity() {
                                         fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
                                     }
                                 }) {
-                                    Icon(
-                                        painter = painterResource(id = android.R.drawable.arrow_down_float),
-                                        contentDescription = "Move Down",
-                                        tint = MaterialTheme.colorScheme.secondary
-                                    )
+                                    Icon(painter = painterResource(id = android.R.drawable.arrow_down_float), contentDescription = "Move Down")
                                 }
                             }
                             IconButton(onClick = {
@@ -262,14 +206,25 @@ class QueueActivity : BaseActivity() {
                                     fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
                                 }
                             }) {
-                                Icon(
-                                    painter = painterResource(id = android.R.drawable.ic_delete),
-                                    contentDescription = "Remove",
-                                    tint = MaterialTheme.colorScheme.tertiary
-                                )
+                                Icon(painter = painterResource(id = android.R.drawable.ic_delete), contentDescription = "Remove")
                             }
                         }
                     )
+                }
+            }
+        }
+    }
+
+    private fun showNoConnectionUI() {
+        setContent {
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text("No connection, fam!")
+                Button(onClick = { WebSocketManager.reconnectNow() }) {
+                    Text("Retry")
                 }
             }
         }
@@ -313,7 +268,7 @@ class QueueActivity : BaseActivity() {
                 } catch (e: Exception) {
                     Log.e(TAG, "Queue parse error: $e")
                     scope.launch {
-                        withContext(Dispatchers.Main) {
+                        withContext(Main) {
                             Toast.makeText(this@QueueActivity, "Queue fetch fucked up! $e", Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -343,7 +298,7 @@ class QueueActivity : BaseActivity() {
             scope.launch {
                 delay(500)
                 WebSocketManager.emit("getState")
-                withContext(Dispatchers.Main) {
+                withContext(Main) {
                     Toast.makeText(this@QueueActivity, "Queue cleared, yo!", Toast.LENGTH_SHORT).show()
                 }
             }
@@ -368,7 +323,7 @@ class QueueActivity : BaseActivity() {
             scope.launch {
                 delay(500)
                 WebSocketManager.emit("getState")
-                withContext(Dispatchers.Main) {
+                withContext(Main) {
                     Toast.makeText(this@QueueActivity, "Playin’ track $index, yo!", Toast.LENGTH_SHORT).show()
                 }
             }
@@ -393,7 +348,7 @@ class QueueActivity : BaseActivity() {
             scope.launch {
                 delay(500)
                 WebSocketManager.emit("getState")
-                withContext(Dispatchers.Main) {
+                withContext(Main) {
                     Toast.makeText(this@QueueActivity, "Removed track, yo!", Toast.LENGTH_SHORT).show()
                 }
             }
@@ -419,7 +374,7 @@ class QueueActivity : BaseActivity() {
             scope.launch {
                 delay(500)
                 WebSocketManager.emit("getState")
-                withContext(Dispatchers.Main) {
+                withContext(Main) {
                     Toast.makeText(this@QueueActivity, "Moved track, yo!", Toast.LENGTH_SHORT).show()
                 }
             }
