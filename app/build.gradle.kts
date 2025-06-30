@@ -78,7 +78,7 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.androidx.constraintlayout.compose)
     implementation(libs.androidx.ui.text)
-//    implementation(libs.material)
+    implementation(libs.androidx.material.icons.extended)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.constraintlayout)
     implementation(libs.androidx.navigation.fragment.ktx)

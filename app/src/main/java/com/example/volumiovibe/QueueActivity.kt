@@ -26,7 +26,16 @@ import org.json.JSONObject
 import androidx.lifecycle.ViewModelProvider
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Book
+import androidx.compose.material.icons.filled.SettingsRemote
+import androidx.compose.material.icons.filled.Search // For search icon
+//import androidx.compose.material.icons.filled.PlaylistPlay // For playlist icon (option 1)
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay // Updated for playlist
+import androidx.compose.material.icons.filled.MoreVert // For menu
+import androidx.compose.ui.draw.shadow
+
 @OptIn(ExperimentalMaterial3Api::class)
+
 class QueueActivity : BaseActivity() {
     private val TAG = "VolumioQueueActivity"
     private var refreshQueueCallback: (() -> Unit)? = null
@@ -131,31 +140,50 @@ class QueueActivity : BaseActivity() {
             topBar = {
                 TopAppBar(
                     title = { Text("Queue", style = MaterialTheme.typography.headlineSmall) },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh // or Highest
+                    ),
+                    modifier = Modifier.shadow(4.dp), // optional: match player’s elevation
                     actions = {
                         IconButton(onClick = {
                             context.startActivity(Intent(context, SearchActivity::class.java).apply {
                                 addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                             })
                         }) {
-                            Icon(painterResource(id = android.R.drawable.ic_menu_search), contentDescription = "Search")
+                            Icon(
+                                imageVector = Icons.Default.Search, // Material Search icon, matches style
+                                contentDescription = "Search",
+                                tint = MaterialTheme.colorScheme.onSurface // Theme-based, no colors
+                            )
                         }
 
                         IconButton(onClick = {
                             context.startActivity(Intent(context, PlaylistActivity::class.java))
                         }) {
-                            Icon(painterResource(id = android.R.drawable.ic_menu_agenda), contentDescription = "Playlist")
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.PlaylistPlay, // Clearer playlist icon
+                                contentDescription = "Playlist",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
                         }
 
                         IconButton(onClick = {
                             context.startActivity(Intent(context, NanoDigiActivity::class.java))
                         }) {
-                            Icon(painterResource(id = android.R.drawable.ic_menu_manage), contentDescription = "nanoDIGI")
+                            Icon(
+                                imageVector = Icons.Default.SettingsRemote, // Keepin’ the sick remote icon
+                                contentDescription = "nanoDIGI",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
                         }
 
-                        // Only "Clear Queue" in menu
                         var expanded by remember { mutableStateOf(false) }
                         IconButton(onClick = { expanded = true }) {
-                            Icon(imageVector = Icons.Default.MoreVert, contentDescription = "More", tint = MaterialTheme.colorScheme.primary)
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "More",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
                         }
                         DropdownMenu(
                             expanded = expanded,
@@ -198,6 +226,7 @@ class QueueActivity : BaseActivity() {
                                 playTrack(index, coroutineScope)
                             }
                         },
+                        isActive = track.uri == playerViewModel.currentTrackUri,
                         actionButtons = {
                             if (index > 0) {
                                 IconButton(onClick = {

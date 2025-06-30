@@ -109,21 +109,6 @@ fun PlaylistScreen(
     }
 
     Scaffold(
-//        topBar = {
-//            TopAppBar(
-//                title = { Text("VolumioVibe", style = MaterialTheme.typography.titleLarge) },
-//                actions = {
-//                    IconButton(onClick = {
-//                        onThemeModeChange(if (themeMode == ThemeMode.DARK) ThemeMode.LIGHT else ThemeMode.DARK)
-//                    }) {
-//                        Icon(
-//                            painter = painterResource(id = if (themeMode == ThemeMode.DARK) R.drawable.ic_sun else R.drawable.ic_moon),
-//                            contentDescription = "Toggle theme"
-//                        )
-//                    }
-//                }
-//            )
-//        },
         floatingActionButton = {
             FloatingActionButton(onClick = { showSheet = true }) {
                 Icon(painter = painterResource(id = R.drawable.ic_add_playlist), contentDescription = "New playlist")

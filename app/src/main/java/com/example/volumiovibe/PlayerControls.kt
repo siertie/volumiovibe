@@ -40,9 +40,10 @@ fun PlayerControls(
 
     Surface(
         modifier = Modifier.fillMaxWidth().padding(8.dp),
-        shadowElevation = 4.dp,
-        tonalElevation = 4.dp
-    ) {
+        color = MaterialTheme.colorScheme.surfaceContainerHigh, // match what you used in TopAppBar
+        shadowElevation = 0.dp,
+        tonalElevation = 0.dp
+    ){
         Column(
             modifier = Modifier.fillMaxWidth().padding(8.dp),
             horizontalAlignment = Alignment.CenterHorizontally
