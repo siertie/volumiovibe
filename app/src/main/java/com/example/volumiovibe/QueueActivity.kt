@@ -28,10 +28,10 @@ import androidx.lifecycle.ViewModelProvider
 class QueueActivity : ComponentActivity() {
     private val TAG = "VolumioQueueActivity"
     private var refreshQueueCallback: (() -> Unit)? = null
+    private lateinit var playerViewModel: PlayerViewModel // Declare as class property
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val TAG = "VolumioQueueActivity"
         var keepSplash = true
         installSplashScreen().setKeepOnScreenCondition { keepSplash }
 
@@ -50,7 +50,7 @@ class QueueActivity : ComponentActivity() {
                 WebSocketManager.emit("getState")
 
                 // Now it's SAFE to construct ViewModel
-                val playerViewModel = ViewModelProvider(
+                playerViewModel = ViewModelProvider(
                     this@QueueActivity,
                     ViewModelProvider.AndroidViewModelFactory.getInstance(application)
                 ).get(PlayerViewModel::class.java)
@@ -74,20 +74,10 @@ class QueueActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         Log.d(TAG, "onResume: Checkin’ WebSocket")
-        if (WebSocketManager.isConnected()) {
-            WebSocketManager.emit("getState")
+        if (::playerViewModel.isInitialized) {
+            playerViewModel.checkForStaleState()
         } else {
-            WebSocketManager.reconnect()
-            // Wait briefly, then force getState. This helps after a reconnect delay.
-            CoroutineScope(Dispatchers.Main).launch {
-                repeat(3) { // Try up to 3 times
-                    delay(800)
-                    if (WebSocketManager.isConnected()) {
-                        WebSocketManager.emit("getState")
-                        return@launch
-                    }
-                }
-            }
+            Log.w(TAG, "onResume: playerViewModel not initialized yet")
         }
         refreshQueueCallback?.invoke()
     }
@@ -373,6 +363,8 @@ class QueueActivity : ComponentActivity() {
         WebSocketManager.emit("clearQueue", null) { args ->
             Log.d(TAG, "Clear queue response: ${args.joinToString()}")
             scope.launch {
+                delay(500)
+                WebSocketManager.emit("getState")
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@QueueActivity, "Queue cleared, yo!", Toast.LENGTH_SHORT).show()
                 }
@@ -396,6 +388,8 @@ class QueueActivity : ComponentActivity() {
         WebSocketManager.emit("play", payload) { args ->
             Log.d(TAG, "Play response: ${args.joinToString()}")
             scope.launch {
+                delay(500)
+                WebSocketManager.emit("getState")
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@QueueActivity, "Playin’ track $index, yo!", Toast.LENGTH_SHORT).show()
                 }
@@ -419,6 +413,8 @@ class QueueActivity : ComponentActivity() {
         WebSocketManager.emit("removeFromQueue", payload) { args ->
             Log.d(TAG, "Remove response: ${args.joinToString()}")
             scope.launch {
+                delay(500)
+                WebSocketManager.emit("getState")
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@QueueActivity, "Removed track, yo!", Toast.LENGTH_SHORT).show()
                 }
@@ -443,6 +439,8 @@ class QueueActivity : ComponentActivity() {
         WebSocketManager.emit("moveQueue", payload) { args ->
             Log.d(TAG, "Got pushQueue: ${args.joinToString()}")
             scope.launch {
+                delay(500)
+                WebSocketManager.emit("getState")
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@QueueActivity, "Moved track, yo!", Toast.LENGTH_SHORT).show()
                 }

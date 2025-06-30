@@ -125,7 +125,6 @@ object WebSocketManager {
     private var reconnecting = false
 
     fun reconnect() {
-        // Only reconnect if not already connected or reconnecting
         if (!isConnected() && socket != null && !reconnecting) {
             reconnecting = true
             CoroutineScope(Dispatchers.IO).launch {
@@ -133,20 +132,17 @@ object WebSocketManager {
                 var retries = 0
                 while (retries < 5 && !isConnected()) {
                     socket?.connect()
-                    if (!waitForConnection(15000)) {
+                    if (waitForConnection(15000)) {
+                        Log.d(TAG, "Reconnect worked, yo!")
+                        emit("getState") // Force state refresh
+                        break
+                    } else {
                         Log.w(TAG, "Reconnect attempt $retries failed")
                         retries++
-                    } else {
-                        Log.d(TAG, "Reconnect worked, yo!")
-                        break
                     }
                 }
                 reconnecting = false
             }
-        } else if (reconnecting) {
-            Log.d(TAG, "Reconnect already in progress, skip")
-        } else if (isConnected()) {
-            Log.d(TAG, "WebSocket already connected, no need to reconnect")
         }
     }
 

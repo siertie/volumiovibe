@@ -24,6 +24,9 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
 
     var lastPushStateTime by mutableStateOf(System.currentTimeMillis())
 
+    // Declare tickJob as a class property
+    private var tickJob: Job? = null
+
     fun maybeReconnectIfStale() {
         val now = System.currentTimeMillis()
         if (now - lastPushStateTime > 10_000) { // 10 seconds
@@ -39,16 +42,20 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
     }
-    // For ticking the seekbar/timer
-    private var tickJob: Job? = null
 
     private fun startTicking() {
         tickJob?.cancel()
         tickJob = viewModelScope.launch {
+            var lastCheck = System.currentTimeMillis()
             while (isActive && isPlaying && playerReady) {
                 delay(200)
                 seekPosition += 0.2f
                 if (seekPosition > trackDuration) seekPosition = trackDuration
+                val now = System.currentTimeMillis()
+                if (now - lastCheck >= 5000) {
+                    checkForStaleState()
+                    lastCheck = now
+                }
             }
         }
     }
@@ -56,6 +63,31 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     private fun stopTicking() {
         tickJob?.cancel()
         tickJob = null
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        tickJob?.cancel()
+    }
+
+    fun checkForStaleState() {
+        val now = System.currentTimeMillis()
+        if (now - lastPushStateTime > 10_000) { // 10 secs since last pushState
+            if (WebSocketManager.isConnected()) {
+                WebSocketManager.emit("getState")
+            } else {
+                WebSocketManager.reconnect()
+                CoroutineScope(Dispatchers.Main).launch {
+                    repeat(3) {
+                        delay(800)
+                        if (WebSocketManager.isConnected()) {
+                            WebSocketManager.emit("getState")
+                            return@launch
+                        }
+                    }
+                }
+            }
+        }
     }
 
     init {
@@ -81,25 +113,21 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
                     val seek = state.optLong("seek", -1).toFloat() / 1000f
                     val duration = state.optLong("duration", 1).toFloat().coerceAtLeast(1f)
                     val uri = state.optString("uri", "")
-                    val isTrackChange = uri != currentTrackUri && uri.isNotEmpty()
                     lastPushStateTime = System.currentTimeMillis()
-                    if (isTrackChange) {
-                        currentTrackUri = uri
-                        seekPosition = 0f
-                    }
-                    isPlaying = (status == "play")
-                    if (seek >= 0f || isTrackChange) {
-                        seekPosition = if (seek >= 0f) seek else 0f
-                    }
+                    currentTrackUri = uri
+                    seekPosition = if (seek >= 0f) seek else 0f
                     trackDuration = duration
+                    isPlaying = (status == "play")
                     statusText = "Volumio Status: $status\nNow Playin’: $title by $artist"
                     playerReady = uri.isNotEmpty()
+                    if (uri.isEmpty()) {
+                        Log.w("PlayerViewModel", "pushState got empty URI: ${args.joinToString()}")
+                    }
                 } catch (e: Exception) {
                     statusText = "Volumio Status: error - $e"
                     playerReady = false
+                    Log.e("PlayerViewModel", "pushState error: $e")
                 }
-
-                // --- Start or stop tick job based on play state ---
                 stopTicking()
                 if (isPlaying && playerReady) startTicking()
             }
