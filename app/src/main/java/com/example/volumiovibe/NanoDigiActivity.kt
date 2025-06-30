@@ -102,7 +102,7 @@ fun SelectableChip(
 }
 
 
-class NanoDigiActivity : ComponentActivity() {
+class NanoDigiActivity : BaseActivity() {
     private val TAG = "NanoDigiActivity"
     private val DEBUG_TAG = "NanoDigiDebug"
     private val client = OkHttpClient()

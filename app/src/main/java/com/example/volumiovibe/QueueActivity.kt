@@ -24,11 +24,13 @@ import kotlinx.coroutines.Dispatchers.Main
 import org.json.JSONArray
 import org.json.JSONObject
 import androidx.lifecycle.ViewModelProvider
-
-class QueueActivity : ComponentActivity() {
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.MoreVert
+@OptIn(ExperimentalMaterial3Api::class)
+class QueueActivity : BaseActivity() {
     private val TAG = "VolumioQueueActivity"
     private var refreshQueueCallback: (() -> Unit)? = null
-    private lateinit var playerViewModel: PlayerViewModel // Declare as class property
+    private lateinit var playerViewModel: PlayerViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,7 +38,7 @@ class QueueActivity : ComponentActivity() {
         installSplashScreen().setKeepOnScreenCondition { keepSplash }
 
         CoroutineScope(Dispatchers.IO).launch {
-            val connected = WebSocketManager.waitForConnection(5000) // 5s timeout
+            val connected = WebSocketManager.waitForConnection(5000)
             withContext(Dispatchers.Main) {
                 keepSplash = false
                 if (connected) {
@@ -47,12 +49,9 @@ class QueueActivity : ComponentActivity() {
                         ViewModelProvider.AndroidViewModelFactory.getInstance(application)
                     ).get(PlayerViewModel::class.java)
                     setContent {
-                        var themeMode by remember { mutableStateOf(ThemeMode.SYSTEM) }
-                        AppTheme(themeMode = themeMode) {
+                        AppTheme(themeMode = ThemeMode.SYSTEM) {
                             QueueScreen(
                                 onRefreshCallback = { refreshQueueCallback = it },
-                                themeMode = themeMode,
-                                onThemeModeChange = { newMode -> themeMode = newMode },
                                 playerViewModel = playerViewModel
                             )
                         }
@@ -95,8 +94,6 @@ class QueueActivity : ComponentActivity() {
     @Composable
     fun QueueScreen(
         onRefreshCallback: (() -> Unit) -> Unit,
-        themeMode: ThemeMode,
-        onThemeModeChange: (ThemeMode) -> Unit,
         playerViewModel: PlayerViewModel
     ) {
         var queue by remember { mutableStateOf<List<Track>>(emptyList()) }
@@ -119,7 +116,6 @@ class QueueActivity : ComponentActivity() {
                     }
                 }
             }
-            // Wait for connection and fetch queue/state
             if (WebSocketManager.waitForConnection()) {
                 WebSocketManager.emit("getState")
                 fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
@@ -130,173 +126,126 @@ class QueueActivity : ComponentActivity() {
                 WebSocketManager.reconnect()
             }
         }
+
         Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Queue", style = MaterialTheme.typography.headlineSmall) },
+                    actions = {
+                        var expanded by remember { mutableStateOf(false) }
+                        IconButton(onClick = { expanded = true }) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "More",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Clear Queue") },
+                                onClick = {
+                                    expanded = false
+                                    coroutineScope.launch {
+                                        clearQueue(coroutineScope)
+                                        fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
+                                    }
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Search") },
+                                onClick = {
+                                    expanded = false
+                                    context.startActivity(Intent(context, SearchActivity::class.java).apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                                    })
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Playlist") },
+                                onClick = {
+                                    expanded = false
+                                    context.startActivity(Intent(context, PlaylistActivity::class.java))
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("nanoDIGI") },
+                                onClick = {
+                                    expanded = false
+                                    context.startActivity(Intent(context, NanoDigiActivity::class.java))
+                                }
+                            )
+                        }
+                    }
+                )
+            },
             bottomBar = {
                 NowPlayingBar(playerViewModel = playerViewModel)
             }
         ) { padding ->
-            Column(
+            LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .padding(16.dp)
+                    .padding(horizontal = 16.dp)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Queue",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = if (themeMode == ThemeMode.DARK) "Dark" else "Light",
-                            color = MaterialTheme.colorScheme.onSurface,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Switch(
-                            checked = themeMode == ThemeMode.DARK,
-                            onCheckedChange = {
-                                onThemeModeChange(if (it) ThemeMode.DARK else ThemeMode.LIGHT)
-                            },
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = MaterialTheme.colorScheme.primary,
-                                checkedTrackColor = MaterialTheme.colorScheme.primaryContainer,
-                                uncheckedThumbColor = MaterialTheme.colorScheme.onSurface,
-                                uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-                Button(
-                    onClick = {
-                        coroutineScope.launch {
-                            clearQueue(coroutineScope)
-                            fetchQueue(coroutineScope) { newQueue ->
-                                queue = newQueue
+                itemsIndexed(
+                    items = queue,
+                    key = { index, track -> "${track.uri}_$index" }
+                ) { index, track ->
+                    TrackItem(
+                        track = track,
+                        index = index,
+                        onClick = {
+                            coroutineScope.launch {
+                                playTrack(index, coroutineScope)
                             }
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.secondary,
-                        contentColor = MaterialTheme.colorScheme.onSecondary
-                    )
-                ) {
-                    Text("Clear Queue")
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Button(
-                    onClick = {
-                        Log.d(TAG, "Navigatin’ to SearchActivity with CLEAR_TOP | SINGLE_TOP")
-                        context.startActivity(Intent(context, SearchActivity::class.java).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                        })
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.secondary,
-                        contentColor = MaterialTheme.colorScheme.onSecondary
-                    )
-                ) {
-                    Text("Go to Search")
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Button(
-                    onClick = {
-                        context.startActivity(Intent(context, PlaylistActivity::class.java))
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.secondary,
-                        contentColor = MaterialTheme.colorScheme.onSecondary
-                    )
-                ) {
-                    Text("Go to Playlist")
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Button(
-                    onClick = {
-                        Log.d(TAG, "Navigatin’ to NanoDigiActivity")
-                        context.startActivity(Intent(context, NanoDigiActivity::class.java))
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.secondary,
-                        contentColor = MaterialTheme.colorScheme.onSecondary
-                    )
-                ) {
-                    Text("Go to nanoDIGI")
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-                LazyColumn {
-                    itemsIndexed(
-                        items = queue,
-                        key = { index, track -> "${track.uri}_$index" }
-                    ) { index, track ->
-                        TrackItem(
-                            track = track,
-                            index = index,
-                            onClick = {
-                                coroutineScope.launch {
-                                    playTrack(index, coroutineScope)
-                                }
-                            },
-                            actionButtons = {
-                                if (index > 0) {
-                                    IconButton(onClick = {
-                                        coroutineScope.launch {
-                                            moveTrack(index, index - 1, coroutineScope)
-                                            fetchQueue(coroutineScope) { newQueue ->
-                                                queue = newQueue
-                                            }
-                                        }
-                                    }) {
-                                        Icon(
-                                            painter = painterResource(id = android.R.drawable.arrow_up_float),
-                                            contentDescription = "Move Up",
-                                            tint = MaterialTheme.colorScheme.secondary
-                                        )
-                                    }
-                                }
-                                if (index < queue.size - 1) {
-                                    IconButton(onClick = {
-                                        coroutineScope.launch {
-                                            moveTrack(index, index + 1, coroutineScope)
-                                            fetchQueue(coroutineScope) { newQueue ->
-                                                queue = newQueue
-                                            }
-                                        }
-                                    }) {
-                                        Icon(
-                                            painter = painterResource(id = android.R.drawable.arrow_down_float),
-                                            contentDescription = "Move Down",
-                                            tint = MaterialTheme.colorScheme.secondary
-                                        )
-                                    }
-                                }
+                        },
+                        actionButtons = {
+                            if (index > 0) {
                                 IconButton(onClick = {
                                     coroutineScope.launch {
-                                        removeFromQueue(index, coroutineScope)
-                                        fetchQueue(coroutineScope) { newQueue ->
-                                            queue = newQueue
-                                        }
+                                        moveTrack(index, index - 1, coroutineScope)
+                                        fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
                                     }
                                 }) {
                                     Icon(
-                                        painter = painterResource(id = android.R.drawable.ic_delete),
-                                        contentDescription = "Remove",
-                                        tint = MaterialTheme.colorScheme.tertiary
+                                        painter = painterResource(id = android.R.drawable.arrow_up_float),
+                                        contentDescription = "Move Up",
+                                        tint = MaterialTheme.colorScheme.secondary
                                     )
                                 }
                             }
-                        )
-                    }
+                            if (index < queue.size - 1) {
+                                IconButton(onClick = {
+                                    coroutineScope.launch {
+                                        moveTrack(index, index + 1, coroutineScope)
+                                        fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
+                                    }
+                                }) {
+                                    Icon(
+                                        painter = painterResource(id = android.R.drawable.arrow_down_float),
+                                        contentDescription = "Move Down",
+                                        tint = MaterialTheme.colorScheme.secondary
+                                    )
+                                }
+                            }
+                            IconButton(onClick = {
+                                coroutineScope.launch {
+                                    removeFromQueue(index, coroutineScope)
+                                    fetchQueue(coroutineScope) { newQueue -> queue = newQueue }
+                                }
+                            }) {
+                                Icon(
+                                    painter = painterResource(id = android.R.drawable.ic_delete),
+                                    contentDescription = "Remove",
+                                    tint = MaterialTheme.colorScheme.tertiary
+                                )
+                            }
+                        }
+                    )
                 }
             }
         }

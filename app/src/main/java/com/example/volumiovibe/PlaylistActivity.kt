@@ -55,7 +55,7 @@ object PlaylistStateHolder {
 
 // ──────────────────── ACTIVITY ────────────────────
 
-class PlaylistActivity : ComponentActivity() {
+class PlaylistActivity : BaseActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {

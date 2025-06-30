@@ -20,7 +20,7 @@ import kotlinx.coroutines.Dispatchers.Main
 import org.json.JSONArray
 import org.json.JSONObject
 
-class SearchActivity : ComponentActivity() {
+class SearchActivity : BaseActivity() {
     private val TAG = "VolumioSearchActivity"
 
     override fun onCreate(savedInstanceState: Bundle?) {
