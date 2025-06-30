@@ -35,36 +35,41 @@ class QueueActivity : ComponentActivity() {
         var keepSplash = true
         installSplashScreen().setKeepOnScreenCondition { keepSplash }
 
-        // First, initialize WebSocketManager and wait for connection BEFORE creating ViewModel or Compose UI
         CoroutineScope(Dispatchers.IO).launch {
-            WebSocketManager.initialize()
-            val connected = WebSocketManager.waitForConnection()
+            val connected = WebSocketManager.waitForConnection(5000) // 5s timeout
             withContext(Dispatchers.Main) {
                 keepSplash = false
-
                 if (connected) {
                     Log.d(TAG, "WebSocket connected, yo!")
+                    WebSocketManager.emit("getState")
+                    playerViewModel = ViewModelProvider(
+                        this@QueueActivity,
+                        ViewModelProvider.AndroidViewModelFactory.getInstance(application)
+                    ).get(PlayerViewModel::class.java)
+                    setContent {
+                        var themeMode by remember { mutableStateOf(ThemeMode.SYSTEM) }
+                        AppTheme(themeMode = themeMode) {
+                            QueueScreen(
+                                onRefreshCallback = { refreshQueueCallback = it },
+                                themeMode = themeMode,
+                                onThemeModeChange = { newMode -> themeMode = newMode },
+                                playerViewModel = playerViewModel
+                            )
+                        }
+                    }
                 } else {
                     Log.e(TAG, "WebSocket failed, fam")
-                }
-                WebSocketManager.emit("getState")
-
-                // Now it's SAFE to construct ViewModel
-                playerViewModel = ViewModelProvider(
-                    this@QueueActivity,
-                    ViewModelProvider.AndroidViewModelFactory.getInstance(application)
-                ).get(PlayerViewModel::class.java)
-
-                // Set up the Compose UI tree
-                setContent {
-                    var themeMode by remember { mutableStateOf(ThemeMode.SYSTEM) }
-                    AppTheme(themeMode = themeMode) {
-                        QueueScreen(
-                            onRefreshCallback = { refreshQueueCallback = it },
-                            themeMode = themeMode,
-                            onThemeModeChange = { newMode -> themeMode = newMode },
-                            playerViewModel = playerViewModel
-                        )
+                    setContent {
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text("No connection, fam!")
+                            Button(onClick = { WebSocketManager.reconnectNow() }) {
+                                Text("Retry")
+                            }
+                        }
                     }
                 }
             }

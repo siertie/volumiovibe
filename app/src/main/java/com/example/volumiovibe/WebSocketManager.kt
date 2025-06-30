@@ -27,11 +27,11 @@ object WebSocketManager {
             val opts = IO.Options().apply {
                 forceNew = true
                 reconnection = true
-                reconnectionAttempts = 20
-                reconnectionDelay = 500
-                reconnectionDelayMax = 2000
+                reconnectionAttempts = 5 // Down from 20
+                reconnectionDelay = 200 // Down from 500
+                reconnectionDelayMax = 1000 // Down from 2000
+                timeout = 5000 // Explicit connect timeout
                 transports = arrayOf("websocket")
-                query = "EIO=3"
             }
             socket = IO.socket(volumioUrl, opts)
             socket?.on(Socket.EVENT_CONNECT) {
@@ -59,10 +59,11 @@ object WebSocketManager {
 
     fun isConnected(): Boolean = isConnected && socket?.connected() == true
 
-    suspend fun waitForConnection(timeoutMs: Long = 15000): Boolean {
+    suspend fun waitForConnection(timeoutMs: Long = 5000): Boolean {
         val start = System.currentTimeMillis()
         while (!isConnected() && System.currentTimeMillis() - start < timeoutMs) {
-            delay(100)
+            socket?.connect() // Force connect attempt
+            delay(50) // Tighter loop
         }
         return isConnected()
     }
@@ -146,6 +147,19 @@ object WebSocketManager {
         }
     }
 
+    fun reconnectNow() {
+        if (!isConnected() && !reconnecting) {
+            reconnecting = true
+            socket?.connect()
+            Log.d(TAG, "Forcin’ reconnect, yo!")
+            CoroutineScope(Dispatchers.IO).launch {
+                if (waitForConnection(5000)) {
+                    emit("getState")
+                }
+                reconnecting = false
+            }
+        }
+    }
 
     private fun getResponseEvent(event: String): String {
         return when (event) {
