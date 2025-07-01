@@ -115,31 +115,6 @@ class NanoDigiActivity : BaseActivity() {
     private val DEBUG_TAG = "NanoDigiDebug"
     private val client = OkHttpClient()
 
-    private fun fetchDevice(
-        scope: CoroutineScope,
-        context: android.content.Context,
-        onDeviceReceived: (String) -> Unit
-    ) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                val request = Request.Builder()
-                    .url("http://192.168.0.250:8080/get_device")
-                    .get()
-                    .build()
-                client.newCall(request).execute().use { response ->
-                    val responseBody = response.body?.string()?.trim() ?: ""
-                    if (response.isSuccessful && responseBody.startsWith("hw:")) {
-                        withContext(Dispatchers.Main) {
-                            onDeviceReceived(responseBody)
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                // Optionally handle errors here
-            }
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -159,16 +134,12 @@ class NanoDigiActivity : BaseActivity() {
 
             // ---- SYNC ALL STATE FROM BACKEND ----
             LaunchedEffect(Unit) {
-                // Fetch *all* state from /devices/0
-                fetchState(coroutineScope, context) { newConfig, newSource, newVolume, newMute ->
+                fetchAllState(coroutineScope, context, outputMap) { newConfig, newSource, newVolume, newMute, newOutput ->
                     config = newConfig
                     source = newSource
                     volume = newVolume
                     mute = newMute
-                }
-                // Fetch the current output device
-                fetchDevice(coroutineScope, context) { deviceStr ->
-                    output = outputMap[deviceStr] ?: "Shield TV"
+                    output = newOutput
                 }
             }
             // --------------------------------------
@@ -202,9 +173,6 @@ class NanoDigiActivity : BaseActivity() {
                         // Delay fetch to allow backend to update (250ms is usually enough)
                         coroutineScope.launch {
                             delay(250)
-                            fetchDevice(coroutineScope, context) { deviceStr ->
-                                output = outputMap[deviceStr] ?: "Shield TV"
-                            }
                         }
                     },
                     sendConfig = { v -> sendConfig(coroutineScope, context, volume = v) }
@@ -558,45 +526,46 @@ class NanoDigiActivity : BaseActivity() {
         }
     }
 
-    private fun fetchState(
+    private fun fetchAllState(
         scope: CoroutineScope,
         context: android.content.Context,
-        onStateReceived: (Int, String, Float, Boolean) -> Unit
+        outputMap: Map<String, String>,
+        onState: (Int, String, Float, Boolean, String) -> Unit
     ) {
         scope.launch(Dispatchers.IO) {
             try {
-                val request = Request.Builder()
+                // Fetch /devices/0
+                val configReq = Request.Builder()
                     .url("http://192.168.0.250:5380/devices/0")
                     .get()
                     .build()
+                val configRes = client.newCall(configReq).execute()
+                val configBody = configRes.body?.string() ?: "{}"
+                val master = JSONObject(configBody).optJSONObject("master") ?: JSONObject()
 
-                client.newCall(request).execute().use { response ->
-                    val responseBody = response.body?.string() ?: "{}"
-                    Log.d(DEBUG_TAG, "GET response: code=${response.code}, body=$responseBody")
-                    if (response.isSuccessful) {
-                        val json = JSONObject(responseBody)
-                        val master = json.optJSONObject("master") ?: JSONObject()
-                        val newPreset = master.optInt("preset", 3)
-                        val newSource = master.optString("source", "Toslink")
-                        val newVolume = master.optDouble("volume", -37.0).toFloat()
-                        val newMute = master.optBoolean("mute", false)
+                val preset = master.optInt("preset", 3)
+                val source = master.optString("source", "Toslink")
+                val volume = master.optDouble("volume", -37.0).toFloat()
+                val mute = master.optBoolean("mute", false)
 
-                        withContext(Dispatchers.Main) {
-                            onStateReceived(newPreset, newSource, newVolume, newMute)
-                            Toast.makeText(context, "Fetched nanoDIGI state, yo!", Toast.LENGTH_SHORT).show()
-                        }
-                    } else {
-                        Log.e(TAG, "HTTP GET failed: ${response.code} ${response.message}")
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(context, "State fetch fucked up: ${response.message}", Toast.LENGTH_SHORT).show()
-                        }
-                    }
+                // Fetch /get_device
+                val devReq = Request.Builder()
+                    .url("http://192.168.0.250:8080/get_device")
+                    .get()
+                    .build()
+                val devRes = client.newCall(devReq).execute()
+                val deviceStr = devRes.body?.string()?.trim() ?: ""
+                Log.d("NanoDigiDebug", "Fetched device: $deviceStr")
+
+                withContext(Dispatchers.Main) {
+                    val cleanDevice = deviceStr.removeSurrounding("\"")
+                    val mappedOutput = outputMap[cleanDevice] ?: cleanDevice
+                    onState(preset, source, volume, mute, mappedOutput)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "HTTP GET error: $e")
-                Log.d(DEBUG_TAG, "GET crashed: $e")
+                Log.e("NanoDigiDebug", "fetchAllState error", e)
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "State fetch crashed: $e", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Failed to fetch state: ${e.message}", Toast.LENGTH_SHORT).show()
                 }
             }
         }
