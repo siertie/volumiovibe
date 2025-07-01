@@ -33,29 +33,36 @@ import kotlin.math.roundToInt
 import androidx.compose.foundation.shape.RoundedCornerShape
 
 
-
 private fun setDevice(
+    profile: String,
     device: String,
     context: android.content.Context
 ) {
     val client = OkHttpClient()
-    val url = "http://192.168.0.250:8080/set_device?name=$device"
+    val urlBuilder = HttpUrl.Builder()
+        .scheme("http")
+        .host("192.168.0.250")
+        .port(8080)
+        .addPathSegment("set_profile_device")
+        .addQueryParameter("profile", profile)
+        .addQueryParameter("capture_device", device)
     val request = Request.Builder()
         .get()
-        .url(url)
+        .url(urlBuilder.build())
         .build()
 
     client.newCall(request).enqueue(object : okhttp3.Callback {
         override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
             Handler(Looper.getMainLooper()).post {
-                Toast.makeText(context, "Set device failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Set profile failed: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
+
         override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
             val body = response.body?.string()
             Handler(Looper.getMainLooper()).post {
                 if (response.isSuccessful) {
-                    Toast.makeText(context, "Device set: $body", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Profile applied: $body", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(context, "Set failed: $body", Toast.LENGTH_SHORT).show()
                 }
@@ -63,6 +70,7 @@ private fun setDevice(
         }
     })
 }
+
 
 fun dbToPercent(db: Float): Int {
     return ((db + 100) / 100f * 100).toInt().coerceIn(0, 100)
@@ -190,7 +198,7 @@ class NanoDigiActivity : BaseActivity() {
                     onOutputSelected = { out ->
                         output = out  // Optimistic UI update
                         val dev = reverseOutputMap[out] ?: "hw:sndrpihifiberry,0,0"
-                        setDevice(dev, context)
+                        setDevice("default", dev, context)
                         // Delay fetch to allow backend to update (250ms is usually enough)
                         coroutineScope.launch {
                             delay(250)
