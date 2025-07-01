@@ -31,6 +31,11 @@ import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlin.math.roundToInt
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 
 
 private fun setDevice(
@@ -80,6 +85,7 @@ fun percentToDb(percent: Int): Float {
     return (percent / 100f) * 100f - 100f
 }
 
+
 @Composable
 fun SelectableChip(
     label: String,
@@ -107,6 +113,73 @@ fun SelectableChip(
             selectedBorderWidth = 2.dp
         )
     )
+}
+@Composable
+fun VerticalVolumeSlider(
+    value: Float,
+    valueRange: ClosedFloatingPointRange<Float>,
+    steps: Int,
+    onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit,
+    trackColor: Color,
+    thumbColor: Color,
+    trackWidth: Dp = 8.dp,
+    thumbRadius: Dp = 16.dp,
+    modifier: Modifier = Modifier  // <-- add this
+) {
+    val density = LocalDensity.current
+    var isDragging by remember { mutableStateOf(false) }
+    var dragValue by remember { mutableStateOf(value) }
+
+    BoxWithConstraints(
+        modifier = modifier,         // <-- use the passed-in modifier!
+        contentAlignment = Alignment.Center
+    ) {
+        val sliderHeightPx = with(density) { maxHeight.toPx() }
+        val sliderStart = with(density) { thumbRadius.toPx() }
+        val sliderEnd = sliderHeightPx - sliderStart
+        val valuePercent = ((if (isDragging) dragValue else value) - valueRange.start) / (valueRange.endInclusive - valueRange.start)
+        val thumbY = sliderEnd - valuePercent * (sliderEnd - sliderStart)
+
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectVerticalDragGestures(
+                        onDragEnd = {
+                            isDragging = false
+                            onValueChangeFinished()
+                        },
+                        onDragStart = {
+                            isDragging = true
+                        }
+                    ) { change, _ ->
+                        val newY = change.position.y.coerceIn(sliderStart, sliderEnd)
+                        val percent = 1f - ((newY - sliderStart) / (sliderEnd - sliderStart))
+                        val newValue = valueRange.start + percent * (valueRange.endInclusive - valueRange.start)
+                        val stepped = (
+                                ((newValue - valueRange.start) * steps / (valueRange.endInclusive - valueRange.start))
+                                    .roundToInt()
+                                    .toFloat() * (valueRange.endInclusive - valueRange.start) / steps
+                                ) + valueRange.start
+                        dragValue = stepped.coerceIn(valueRange.start, valueRange.endInclusive)
+                        onValueChange(dragValue)
+                    }
+                }
+        ) {
+            drawLine(
+                color = trackColor,
+                strokeWidth = with(density) { trackWidth.toPx() },
+                start = Offset(size.width / 2f, sliderStart),
+                end = Offset(size.width / 2f, sliderEnd)
+            )
+            drawCircle(
+                color = thumbColor,
+                radius = with(density) { thumbRadius.toPx() },
+                center = Offset(size.width / 2f, thumbY)
+            )
+        }
+    }
 }
 
 
@@ -177,6 +250,112 @@ class NanoDigiActivity : BaseActivity() {
                     },
                     sendConfig = { v -> sendConfig(coroutineScope, context, volume = v) }
                 )
+            }
+        }
+    }
+
+    private fun sendConfig(
+        scope: CoroutineScope,
+        context: android.content.Context,
+        preset: Int? = null,
+        source: String? = null,
+        volume: Float? = null,
+        mute: Boolean? = null
+    ) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val masterStatus = JSONObject()
+                when {
+                    preset != null -> masterStatus.put("preset", preset)
+                    source != null -> masterStatus.put("source", source)
+                    volume != null -> masterStatus.put("volume", volume.toDouble())
+                    mute != null -> masterStatus.put("mute", mute)
+                }
+                val json = JSONObject().apply {
+                    put("master_status", masterStatus)
+                }
+                Log.d(DEBUG_TAG, "Sendin’ POST payload: $json")
+                val body = json.toString().toRequestBody("application/json".toMediaType())
+                val request = Request.Builder()
+                    .url("http://192.168.0.250:5380/devices/0/config")
+                    .post(body)
+                    .build()
+
+                client.newCall(request).execute().use { response ->
+                    val responseBody = response.body?.string() ?: "No response body"
+                    Log.d(DEBUG_TAG, "POST response: code=${response.code}, body=$responseBody")
+                    if (response.isSuccessful) {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "Config updated, yo!", Toast.LENGTH_SHORT)
+                                .show()
+                        }
+                    } else {
+                        Log.e(TAG, "HTTP POST failed: ${response.code} ${response.message}")
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(
+                                context,
+                                "Config update fucked up: ${response.message}",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "HTTP POST error: $e")
+                Log.d(DEBUG_TAG, "POST crashed: $e")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(context, "Config update crashed: $e", Toast.LENGTH_SHORT)
+                        .show()
+                }
+            }
+        }
+    }
+
+    private fun fetchAllState(
+        scope: CoroutineScope,
+        context: android.content.Context,
+        outputMap: Map<String, String>,
+        onState: (Int, String, Float, Boolean, String) -> Unit
+    ) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                // Fetch /devices/0
+                val configReq = Request.Builder()
+                    .url("http://192.168.0.250:5380/devices/0")
+                    .get()
+                    .build()
+                val configRes = client.newCall(configReq).execute()
+                val configBody = configRes.body?.string() ?: "{}"
+                val master = JSONObject(configBody).optJSONObject("master") ?: JSONObject()
+
+                val preset = master.optInt("preset", 3)
+                val source = master.optString("source", "Toslink")
+                val volume = master.optDouble("volume", -37.0).toFloat()
+                val mute = master.optBoolean("mute", false)
+
+                // Fetch /get_device
+                val devReq = Request.Builder()
+                    .url("http://192.168.0.250:8080/get_device")
+                    .get()
+                    .build()
+                val devRes = client.newCall(devReq).execute()
+                val deviceStr = devRes.body?.string()?.trim() ?: ""
+                Log.d("NanoDigiDebug", "Fetched device: $deviceStr")
+
+                withContext(Dispatchers.Main) {
+                    val cleanDevice = deviceStr.removeSurrounding("\"")
+                    val mappedOutput = outputMap[cleanDevice] ?: cleanDevice
+                    onState(preset, source, volume, mute, mappedOutput)
+                }
+            } catch (e: Exception) {
+                Log.e("NanoDigiDebug", "fetchAllState error", e)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        context,
+                        "Failed to fetch state: ${e.message}",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
             }
         }
     }
@@ -293,41 +472,40 @@ class NanoDigiActivity : BaseActivity() {
                         }
                     }
                 }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // --- Mute Button ---
-                Button(
-                    onClick = { onMuteToggle() },
-                    modifier = Modifier.align(Alignment.CenterHorizontally)
-                ) {
-                    Text(if (mute) "Unmute" else "Mute")
-                }
             }
 
             // --- Vertical Volume Slider, Right Side ---
-            Column(
+            Box(
                 modifier = Modifier
                     .width(80.dp)
-                    .fillMaxHeight(),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .fillMaxHeight()
             ) {
-                Text("Vol", style = MaterialTheme.typography.labelSmall)
-
-                Box(
+                Column(
                     modifier = Modifier
-                        .fillMaxHeight(0.75f)
-                        .padding(vertical = 8.dp),
-                    contentAlignment = Alignment.Center
+                        .fillMaxHeight()
+                        .width(80.dp)
+                        .fillMaxHeight(),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
+                    val muteIconTopPadding = 16.dp + 8.dp + 16.dp
+                    IconButton(
+                        onClick = { onMuteToggle() },
+                        modifier = Modifier.padding(top = muteIconTopPadding, bottom = 8.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (mute) Icons.Filled.VolumeOff else Icons.Filled.VolumeUp,
+                            contentDescription = if (mute) "Unmute" else "Mute"
+                        )
+                    }
+
+                    // Let the slider fill available height, but not overlap icon or text
                     VerticalVolumeSlider(
                         value = volume,
                         valueRange = -100f..0f,
                         steps = 99,
                         onValueChange = { newVol ->
                             onVolumeChange(newVol)
-                            pendingVolume = newVol // Always reflect the slider position
+                            pendingVolume = newVol
                         },
                         onValueChangeFinished = {
                             if (pendingVolume > -20f) {
@@ -340,233 +518,51 @@ class NanoDigiActivity : BaseActivity() {
                         trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f),
                         thumbColor = MaterialTheme.colorScheme.primary,
                         trackWidth = 8.dp,
-                        thumbRadius = 16.dp
+                        thumbRadius = 16.dp,
+                        modifier = Modifier
+                            .weight(1f)        // <-- this is KEY, makes it take all available space!
+                            .width(48.dp)
+                    )
+
+                    Text(
+                        "${dbToPercent(volume)}% (${volume.toInt()} dB)",
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(vertical = 8.dp)
                     )
                 }
-                Text("${dbToPercent(volume)}% (${volume.toInt()} dB)", style = MaterialTheme.typography.labelSmall)
             }
-        }
 
-        // --- Confirmation Dialog ---
-        if (showVolumeDialog) {
-            AlertDialog(
-                onDismissRequest = {
-                    showVolumeDialog = false
-                    onVolumeChange(previousVolume)
-                },
-                title = { Text("Are you sure?") },
-                text = { Text("Volume will be set at ${pendingVolume.toInt()} dB") },
-                // Cancel first, styled as filled Button
-                dismissButton = {
-                    Button(
-                        onClick = {
-                            showVolumeDialog = false
-                            onVolumeChange(previousVolume)
-                        }
-                    ) {
-                        Text("Cancel")
-                    }
-                },
-                // Confirm second, styled as plain TextButton
-                confirmButton = {
-                    TextButton(onClick = {
-                        sendConfig(pendingVolume)
-                        previousVolume = pendingVolume
+            // --- Confirmation Dialog ---
+            if (showVolumeDialog) {
+                AlertDialog(
+                    onDismissRequest = {
                         showVolumeDialog = false
-                    }) {
-                        Text("Yes, set volume")
-                    }
-                }
-            )
-        }
-    }
-
-
-    @Composable
-    fun VerticalVolumeSlider(
-        value: Float,
-        valueRange: ClosedFloatingPointRange<Float>,
-        steps: Int,
-        onValueChange: (Float) -> Unit,
-        onValueChangeFinished: () -> Unit,
-        trackColor: Color,
-        thumbColor: Color,
-        trackWidth: Dp = 8.dp,
-        thumbRadius: Dp = 16.dp
-    ) {
-        val density = LocalDensity.current
-        var isDragging by remember { mutableStateOf(false) }
-        var dragValue by remember { mutableStateOf(value) }
-
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxHeight()
-                .width(48.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            val sliderHeightPx = with(density) { maxHeight.toPx() }
-            val sliderStart = with(density) { thumbRadius.toPx() }
-            val sliderEnd = sliderHeightPx - sliderStart
-            val valuePercent = (if (isDragging) dragValue else value - valueRange.start) / (valueRange.endInclusive - valueRange.start)
-            val thumbY = sliderEnd - valuePercent * (sliderEnd - sliderStart)
-
-            Canvas(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .width(48.dp)
-                    .pointerInput(Unit) {
-                        detectVerticalDragGestures(
-                            onDragEnd = {
-                                isDragging = false
-                                onValueChangeFinished()
-                            },
-                            onDragStart = {
-                                isDragging = true
+                        onVolumeChange(previousVolume)
+                    },
+                    title = { Text("Are you sure?") },
+                    text = { Text("Volume will be set at ${pendingVolume.toInt()} dB") },
+                    // Cancel first, styled as filled Button
+                    dismissButton = {
+                        Button(
+                            onClick = {
+                                showVolumeDialog = false
+                                onVolumeChange(previousVolume)
                             }
-                        ) { change, _ ->
-                            val newY = change.position.y.coerceIn(sliderStart, sliderEnd)
-                            val percent = 1f - ((newY - sliderStart) / (sliderEnd - sliderStart))
-                            val newValue = valueRange.start + percent * (valueRange.endInclusive - valueRange.start)
-                            val stepped = (
-                                    ((newValue - valueRange.start) * steps / (valueRange.endInclusive - valueRange.start))
-                                        .roundToInt()
-                                        .toFloat() * (valueRange.endInclusive - valueRange.start) / steps
-                                    ) + valueRange.start
-                            dragValue = stepped.coerceIn(valueRange.start, valueRange.endInclusive)
-                            onValueChange(dragValue)
+                        ) {
+                            Text("Cancel")
+                        }
+                    },
+                    // Confirm second, styled as plain TextButton
+                    confirmButton = {
+                        TextButton(onClick = {
+                            sendConfig(pendingVolume)
+                            previousVolume = pendingVolume
+                            showVolumeDialog = false
+                        }) {
+                            Text("Yes, set volume")
                         }
                     }
-            ) {
-                drawLine(
-                    color = trackColor,
-                    strokeWidth = with(density) { trackWidth.toPx() },
-                    start = Offset(size.width / 2f, sliderStart),
-                    end = Offset(size.width / 2f, sliderEnd)
                 )
-                drawCircle(
-                    color = thumbColor,
-                    radius = with(density) { thumbRadius.toPx() },
-                    center = Offset(size.width / 2f, thumbY)
-                )
-            }
-
-            // --- Floating label while dragging ---
-            if (isDragging) {
-                Box(
-                    modifier = Modifier
-                        .offset(y = with(density) { thumbY.toDp() - 28.dp }) // adjust -28.dp for label height
-                        .align(Alignment.Center)
-                ) {
-                    Surface(
-                        shadowElevation = 4.dp,
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.padding(4.dp)
-                    ) {
-                        Text(
-                            "${dbToPercent(dragValue)}% (${dragValue.toInt()} dB)",
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                            style = MaterialTheme.typography.labelMedium
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-
-    private fun sendConfig(
-        scope: CoroutineScope,
-        context: android.content.Context,
-        preset: Int? = null,
-        source: String? = null,
-        volume: Float? = null,
-        mute: Boolean? = null
-    ) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                val masterStatus = JSONObject()
-                when {
-                    preset != null -> masterStatus.put("preset", preset)
-                    source != null -> masterStatus.put("source", source)
-                    volume != null -> masterStatus.put("volume", volume.toDouble())
-                    mute != null -> masterStatus.put("mute", mute)
-                }
-                val json = JSONObject().apply {
-                    put("master_status", masterStatus)
-                }
-                Log.d(DEBUG_TAG, "Sendin’ POST payload: $json")
-                val body = json.toString().toRequestBody("application/json".toMediaType())
-                val request = Request.Builder()
-                    .url("http://192.168.0.250:5380/devices/0/config")
-                    .post(body)
-                    .build()
-
-                client.newCall(request).execute().use { response ->
-                    val responseBody = response.body?.string() ?: "No response body"
-                    Log.d(DEBUG_TAG, "POST response: code=${response.code}, body=$responseBody")
-                    if (response.isSuccessful) {
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(context, "Config updated, yo!", Toast.LENGTH_SHORT).show()
-                        }
-                    } else {
-                        Log.e(TAG, "HTTP POST failed: ${response.code} ${response.message}")
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(context, "Config update fucked up: ${response.message}", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "HTTP POST error: $e")
-                Log.d(DEBUG_TAG, "POST crashed: $e")
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Config update crashed: $e", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-    }
-
-    private fun fetchAllState(
-        scope: CoroutineScope,
-        context: android.content.Context,
-        outputMap: Map<String, String>,
-        onState: (Int, String, Float, Boolean, String) -> Unit
-    ) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                // Fetch /devices/0
-                val configReq = Request.Builder()
-                    .url("http://192.168.0.250:5380/devices/0")
-                    .get()
-                    .build()
-                val configRes = client.newCall(configReq).execute()
-                val configBody = configRes.body?.string() ?: "{}"
-                val master = JSONObject(configBody).optJSONObject("master") ?: JSONObject()
-
-                val preset = master.optInt("preset", 3)
-                val source = master.optString("source", "Toslink")
-                val volume = master.optDouble("volume", -37.0).toFloat()
-                val mute = master.optBoolean("mute", false)
-
-                // Fetch /get_device
-                val devReq = Request.Builder()
-                    .url("http://192.168.0.250:8080/get_device")
-                    .get()
-                    .build()
-                val devRes = client.newCall(devReq).execute()
-                val deviceStr = devRes.body?.string()?.trim() ?: ""
-                Log.d("NanoDigiDebug", "Fetched device: $deviceStr")
-
-                withContext(Dispatchers.Main) {
-                    val cleanDevice = deviceStr.removeSurrounding("\"")
-                    val mappedOutput = outputMap[cleanDevice] ?: cleanDevice
-                    onState(preset, source, volume, mute, mappedOutput)
-                }
-            } catch (e: Exception) {
-                Log.e("NanoDigiDebug", "fetchAllState error", e)
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Failed to fetch state: ${e.message}", Toast.LENGTH_SHORT).show()
-                }
             }
         }
     }
