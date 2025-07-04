@@ -857,53 +857,53 @@ class PlaylistViewModel(application: Application) : ViewModel() {
             throw e
         }
     }
-    fun testTidalPlaylistRequest() {
-        viewModelScope.launch {
-            val testJson = JSONObject().apply {
-                put("name", "TestPlaylist_Kotlin")
-                put("songs", JSONArray().apply {
-                    put(JSONObject().apply {
-                        put("artist", "Glass Animals")
-                        put("title", "Gooey")
-                        put("tidal_id", 30209245)
-                    })
-                    put(JSONObject().apply {
-                        put("artist", "The Knife")
-                        put("title", "Pass This On")
-                        put("tidal_id", 241824197)
-                    })
-                    put(JSONObject().apply {
-                        put("artist", "Machel Montano")
-                        put("title", "Fast Wine")
-                        put("tidal_id", 310247914)
-                    })
-                })
-            }
-
-            val jsonString = testJson.toString()
-            Log.d("VIBE_TIDAL", "🧪 Sending test TIDAL playlist JSON: $jsonString")
-
-            try {
-                withContext(Dispatchers.IO) {
-                    val client = okhttp3.OkHttpClient()
-                    val request = okhttp3.Request.Builder()
-                        .url("http://192.168.0.250:5050/add_playlist")
-                        .post(jsonString.toRequestBody("application/json".toMediaType()))
-                        .build()
-
-                    client.newCall(request).execute().use { response ->
-                        val responseBody = response.body?.string()
-                        Log.d("VIBE_TIDAL", "📝 Test response code: ${response.code}")
-                        Log.d("VIBE_TIDAL", "📝 Test response body: $responseBody")
-
-                        if (!response.isSuccessful) {
-                            Log.e("VIBE_TIDAL", "❌ Test request failed: HTTP ${response.code}")
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e("VIBE_TIDAL", "💥 Test request crashed", e)
-            }
-        }
-    }
+//    fun testTidalPlaylistRequest() {
+//        viewModelScope.launch {
+//            val testJson = JSONObject().apply {
+//                put("name", "TestPlaylist_Kotlin")
+//                put("songs", JSONArray().apply {
+//                    put(JSONObject().apply {
+//                        put("artist", "Glass Animals")
+//                        put("title", "Gooey")
+//                        put("tidal_id", 30209245)
+//                    })
+//                    put(JSONObject().apply {
+//                        put("artist", "The Knife")
+//                        put("title", "Pass This On")
+//                        put("tidal_id", 241824197)
+//                    })
+//                    put(JSONObject().apply {
+//                        put("artist", "Machel Montano")
+//                        put("title", "Fast Wine")
+//                        put("tidal_id", 310247914)
+//                    })
+//                })
+//            }
+//
+//            val jsonString = testJson.toString()
+//            Log.d("VIBE_TIDAL", "🧪 Sending test TIDAL playlist JSON: $jsonString")
+//
+//            try {
+//                withContext(Dispatchers.IO) {
+//                    val client = okhttp3.OkHttpClient()
+//                    val request = okhttp3.Request.Builder()
+//                        .url("http://192.168.0.250:5050/add_playlist")
+//                        .post(jsonString.toRequestBody("application/json".toMediaType()))
+//                        .build()
+//
+//                    client.newCall(request).execute().use { response ->
+//                        val responseBody = response.body?.string()
+//                        Log.d("VIBE_TIDAL", "📝 Test response code: ${response.code}")
+//                        Log.d("VIBE_TIDAL", "📝 Test response body: $responseBody")
+//
+//                        if (!response.isSuccessful) {
+//                            Log.e("VIBE_TIDAL", "❌ Test request failed: HTTP ${response.code}")
+//                        }
+//                    }
+//                }
+//            } catch (e: Exception) {
+//                Log.e("VIBE_TIDAL", "💥 Test request crashed", e)
+//            }
+//        }
+//    }
 }
