@@ -21,6 +21,18 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+
+
+data class ResolvedTrack(
+    val artist: String,
+    val title: String,
+    val volumioUri: String? = null,
+    val tidalId: Int? = null
+)
 
 class PlaylistViewModel(application: Application) : ViewModel() {
     private val TAG = "VIBE_DEBUG"
@@ -28,6 +40,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
 //    private val xAiApi = XAiApi(BuildConfig.XAI_API_KEY)
     init {
         Log.d("OpenAiApi", "API KEY BEING USED: '${BuildConfig.OPENAI_API_KEY}'")
+//        testTidalPlaylistRequest()
     }
     private val xAiApi = OpenAiApi(BuildConfig.OPENAI_API_KEY)
     private val prefs = application.getSharedPreferences("VolumioVibePrefs", Context.MODE_PRIVATE)
@@ -123,6 +136,33 @@ class PlaylistViewModel(application: Application) : ViewModel() {
 
     init {
         connectWebSocket()
+    }
+
+    suspend fun searchTidalTrack(query: String): ResolvedTrack? {
+        return try {
+            val client = okhttp3.OkHttpClient()
+            val requestBody = org.json.JSONObject().apply { put("query", query) }
+                .toString().toRequestBody("application/json".toMediaType())
+            val request = okhttp3.Request.Builder()
+                .url("http://192.168.0.250:5050/search") // 🔁 Replace IP!
+                .post(requestBody)
+                .build()
+            val response = client.newCall(request).execute()
+            val body = response.body?.string() ?: return null
+            val json = JSONObject(body)
+            val tracks = json.optJSONArray("tracks") ?: return null
+            if (tracks.length() > 0) {
+                val first = tracks.getJSONObject(0)
+                ResolvedTrack(
+                    artist = first.getString("artist"),
+                    title = first.getString("name"),
+                    tidalId = first.getInt("tidal_id")
+                )
+            } else null
+        } catch (e: Exception) {
+            Log.e("VIBE_DEBUG", "TIDAL search failed for $query: ${e.message}")
+            null
+        }
     }
 
     private fun connectWebSocket() {
@@ -609,10 +649,13 @@ class PlaylistViewModel(application: Application) : ViewModel() {
         viewModelScope.launch {
             isLoading = true
             try {
+                Log.d("VIBE_DEBUG", "🚀 Startin’ AI playlist generation")
                 val vibe = if (selectedVibe != GrokConfig.VIBE_OPTIONS.first()) selectedVibe else vibeInput
+                Log.d("VIBE_DEBUG", "🎶 Vibe selected: $vibe")
                 if (vibe.isNotBlank() && !PlaylistStateHolder.recentVibes.contains(vibe)) {
                     PlaylistStateHolder.recentVibes.add(0, vibe)
                     if (PlaylistStateHolder.recentVibes.size > 5) PlaylistStateHolder.recentVibes.removeLast()
+                    Log.d("VIBE_DEBUG", "📜 Added vibe to recent: ${PlaylistStateHolder.recentVibes}")
                 }
                 val finalPlaylistName = if (playlistName.isBlank()) {
                     xAiApi.generatePlaylistName(
@@ -625,40 +668,41 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                 } else {
                     playlistName.trim()
                 }
+                Log.d("VIBE_DEBUG", "📋 Playlist name set: $finalPlaylistName")
                 createPlaylist(finalPlaylistName)
                 delay(1000)
                 fetchPlaylists()
                 delay(1000)
                 val playlistExists = playlists.any { it.name == finalPlaylistName }
                 if (!playlistExists) {
-                    Log.e(TAG, "Playlist $finalPlaylistName not found after creation!")
+                    Log.e("VIBE_DEBUG", "❌ Playlist $finalPlaylistName not found after creation!")
                     withContext(Dispatchers.Main) {
                         Toast.makeText(context, "Yo, playlist $finalPlaylistName didn’t stick!", Toast.LENGTH_LONG).show()
                     }
                 } else {
-                    Log.d(TAG, "Playlist $finalPlaylistName found in playlists!")
+                    Log.d("VIBE_DEBUG", "✅ Playlist $finalPlaylistName found in playlists!")
                 }
 
                 if (!webSocketManager.isConnected()) {
-                    Log.w("EXCLUDED_SONGS_DEBUG", "WebSocket disconnected, tryin’ to reconnect")
+                    Log.w("VIBE_DEBUG", "🔌 WebSocket disconnected, tryin’ to reconnect")
                     webSocketManager.reconnect()
                     delay(2000)
                     if (!webSocketManager.isConnected()) {
-                        Log.e("EXCLUDED_SONGS_DEBUG", "WebSocket still disconnected, proceedin’ with empty excluded songs")
+                        Log.e("VIBE_DEBUG", "🔌 WebSocket still disconnected, proceedin’ with empty excluded songs")
                     }
                 }
 
                 fetchAllPlaylistTracks()
 
-                Log.d("EXCLUDED_SONGS_DEBUG", "Playlists state before excludedSongs: ${playlists.map { it.name to it.tracks.size }}")
-                Log.d("EXCLUDED_SONGS_DEBUG", "Pending tracks state: ${pendingTracks.mapValues { it.value.size }}")
+                Log.d("VIBE_DEBUG", "📜 Playlists state before excludedSongs: ${playlists.map { it.name to it.tracks.size }}")
+                Log.d("VIBE_DEBUG", "📜 Pending tracks state: ${pendingTracks.mapValues { it.value.size }}")
 
                 val numSongsInt = numSongs.toIntOrNull() ?: GrokConfig.DEFAULT_NUM_SONGS.toInt()
                 val maxSongsPerArtistInt = if (numSongsInt < 10) 1 else maxSongsPerArtist.toIntOrNull() ?: GrokConfig.DEFAULT_MAX_SONGS_PER_ARTIST.toInt()
                 val excludedSongs = playlists.flatMap { it.tracks }
                     .distinctBy { it.uri }
                     .take(GrokConfig.MAX_EXCLUDED_URIS)
-                Log.d("EXCLUDED_SONGS_DEBUG", "Excluded songs: ${excludedSongs.map { "${it.title} by ${it.artist}" }}")
+                Log.d("VIBE_DEBUG", "🚫 Excluded songs: ${excludedSongs.map { "${it.title} by ${it.artist}" }}")
 
                 val songList = xAiApi.generateSongList(
                     vibe = vibe,
@@ -670,7 +714,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     language = language.takeIf { it != GrokConfig.LANGUAGE_OPTIONS.first() },
                     excludedSongs = excludedSongs
                 ) ?: throw Exception("No songs from xAI API")
-                Log.d("EXCLUDED_SONGS_DEBUG", "Song list from Grok: $songList")
+                Log.d("VIBE_DEBUG", "🎵 Song list from Grok: $songList")
 
                 val tracks = songList.split("\n").mapNotNull { line ->
                     val parts = line.split(" - ", limit = 2)
@@ -680,58 +724,185 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                         artist to title
                     } else null
                 }.take(numSongsInt)
-                Log.d("EXCLUDED_SONGS_DEBUG", "Parsed tracks: ${tracks.size} tracks: $tracks")
+                Log.d("VIBE_DEBUG", "📋 Parsed tracks: ${tracks.size} tracks: $tracks")
 
                 var addedTracks = 0
-                val addedUris = mutableSetOf<String>()
-                val artistCounts = mutableMapOf<String, Int>()
-                val trackKeys = mutableSetOf<String>()
+                val resolvedTracks = mutableListOf<ResolvedTrack>()
+                Log.d("VIBE_TIDAL", "🔍 Startin’ track resolution for ${tracks.size} tracks")
                 for ((artist, title) in tracks) {
-                    if (addedTracks >= numSongsInt) break
                     val query = "$artist $title"
+                    Log.d("VIBE_TIDAL", "🔎 Searchin’ Volumio for: $query")
                     search(query)
-                    Log.d("EXCLUDED_SONGS_DEBUG", "Searchin’ for: $query")
-                    val results = waitForSearchResults()
-                    Log.d("EXCLUDED_SONGS_DEBUG", "Got ${results.size} results for $query: ${results.map { it.title }}")
-
-                    val selectedTrack = results.filter { it.type == "song" }
+                    val volumioResults = waitForSearchResults()
+                    Log.d("VIBE_TIDAL", "📊 Volumio results: ${volumioResults.size} tracks")
+                    val match = volumioResults
+                        .filter { it.type == "song" }
                         .firstOrNull { isTrackMatch(title, artist, it.title, it.artist) }
+                    if (match != null) {
+                        Log.d("VIBE_TIDAL", "✅ Volumio match found: ${match.artist} - ${match.title} (URI: ${match.uri})")
+                        resolvedTracks.add(ResolvedTrack(artist, title, volumioUri = match.uri))
+                        continue
+                    }
 
-                    if (selectedTrack != null) {
-                        val trackKey = "${selectedTrack.artist}:${selectedTrack.title}".lowercase()
-                        if (!trackKeys.contains(trackKey)) {
-                            val currentCount = artistCounts.getOrDefault(selectedTrack.artist, 0)
-                            if (currentCount < maxSongsPerArtistInt) {
-                                if (addedUris.add(selectedTrack.uri)) {
-                                    addToPlaylist(finalPlaylistName, selectedTrack.uri, selectedTrack.type)
-                                    addedTracks++
-                                    artistCounts[selectedTrack.artist] = currentCount + 1
-                                    trackKeys.add(trackKey)
-                                    Log.d("EXCLUDED_SONGS_DEBUG", "Added track: ${selectedTrack.title} by ${selectedTrack.artist}, URI: ${selectedTrack.uri}, total added=$addedTracks")
-                                } else {
-                                    Log.w("EXCLUDED_SONGS_DEBUG", "Skipped duplicate URI: ${selectedTrack.uri}")
-                                }
-                            } else {
-                                Log.w("EXCLUDED_SONGS_DEBUG", "Skipped track: ${selectedTrack.title} by ${selectedTrack.artist}, max songs per artist ($maxSongsPerArtistInt) reached")
-                            }
-                        } else {
-                            Log.w("EXCLUDED_SONGS_DEBUG", "Skipped duplicate track: ${selectedTrack.title} by ${selectedTrack.artist}")
-                        }
+                    Log.d("VIBE_TIDAL", "🔎 No Volumio match, searchin’ TIDAL for: $artist - $title")
+                    val tidalResult = searchTidalTrack("$artist - $title")
+                    if (tidalResult != null) {
+                        Log.d("VIBE_TIDAL", "✅ TIDAL match found: ${tidalResult.artist} - ${tidalResult.title} (TIDAL ID: ${tidalResult.tidalId})")
+                        resolvedTracks.add(tidalResult.copy(artist = artist, title = title))
                     } else {
-                        Log.w("EXCLUDED_SONGS_DEBUG", "No matching track found for $query")
+                        Log.w("VIBE_TIDAL", "❌ No match found for: $artist - $title")
                     }
                 }
-                Log.d("EXCLUDED_SONGS_DEBUG", "Final track count: $addedTracks/$numSongsInt")
+                Log.d("VIBE_TIDAL", "📋 Resolved tracks: ${resolvedTracks.size} (Volumio: ${resolvedTracks.count { it.volumioUri != null }}, TIDAL: ${resolvedTracks.count { it.tidalId != null }})")
+
+                val tidalTracksJson = JSONArray()
+
+                for (track in resolvedTracks) {
+                    var tidalId: Int? = null
+
+                    if (track.volumioUri != null) {
+                        Log.d("VIBE_TIDAL", "➕ Addin’ Volumio track to $finalPlaylistName: ${track.artist} - ${track.title}")
+                        addToPlaylist(finalPlaylistName, track.volumioUri, "song")
+                        addedTracks++
+
+                        if (track.volumioUri.startsWith("tidal://song/")) {
+                            tidalId = track.volumioUri.substringAfter("tidal://song/").toIntOrNull()
+                            if (tidalId == null) {
+                                Log.w("VIBE_TIDAL", "⚠️ Couldn’t extract TIDAL ID from URI: ${track.volumioUri}")
+                            }
+                        }
+                    }
+
+                    // Fallback to track.tidalId if not from URI
+                    if (tidalId == null) {
+                        tidalId = track.tidalId
+                    }
+
+                    if (tidalId != null) {
+                        tidalTracksJson.put(JSONObject().apply {
+                            put("artist", track.artist)
+                            put("title", track.title)
+                            put("tidal_id", tidalId)
+                        })
+                        Log.d("VIBE_TIDAL", "🎯 Queued for TIDAL: ${track.artist} - ${track.title} (ID: $tidalId)")
+                    } else {
+                        Log.w("VIBE_TIDAL", "⚠️ Skipped TIDAL add — no ID for: ${track.artist} - ${track.title}")
+                    }
+                }
+
+                Log.d("VIBE_TIDAL", "📦 TIDAL tracks JSON: ${tidalTracksJson.length()} tracks prepared")
+
+                if (tidalTracksJson.length() > 0) {
+                    val requestBodyString = JSONObject().apply {
+                        put("name", finalPlaylistName)
+                        put("songs", tidalTracksJson)
+                    }.toString()
+
+                    Log.d("VIBE_TIDAL", "📤 Sending TIDAL playlist request: $requestBodyString")
+
+                    try {
+                        val responseBody = sendTidalPlaylistRequest(requestBodyString)
+                        val json = JSONObject(responseBody ?: "{}")
+                        val status = json.optString("status", "unknown")
+                        val addedTracksTidal = json.optInt("added_tracks", -1)
+                        Log.d("VIBE_TIDAL", "📊 TIDAL response parsed - status: $status, added_tracks: $addedTracksTidal")
+
+                        if (status != "success" || addedTracksTidal <= 0) {
+                            val errorMsg = json.optString("error", "No tracks added or unknown error")
+                            Log.e("VIBE_TIDAL", "❌ TIDAL playlist add failed: $errorMsg")
+                            throw Exception("TIDAL error: $errorMsg")
+                        }
+
+                        Log.d("VIBE_TIDAL", "✅ TIDAL playlist '$finalPlaylistName' created with $addedTracksTidal tracks")
+                    } catch (e: Exception) {
+                        Log.e("VIBE_TIDAL", "❌ Exception addin’ TIDAL playlist", e)
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(context, "TIDAL playlist failed: ${e.message}", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                } else {
+                    Log.w("VIBE_TIDAL", "⚠️ No TIDAL tracks to send, skippin’ TIDAL playlist creation")
+                }
+
+                Log.d("VIBE_DEBUG", "🏁 Final track count: $addedTracks/$numSongsInt Volumio, ${tidalTracksJson.length()}/$numSongsInt TIDAL")
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Created playlist '$finalPlaylistName' with $addedTracks/$numSongsInt tracks!", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "Created '$finalPlaylistName': $addedTracks Volumio, ${tidalTracksJson.length()} TIDAL", Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "AI playlist generation failed: ${e.message}")
+                Log.e("VIBE_DEBUG", "💥 AI playlist generation crashed: ${e.message}")
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "Shit broke, fam! ${e.message}", Toast.LENGTH_LONG).show()
                 }
             } finally {
                 isLoading = false
+                Log.d("VIBE_DEBUG", "🛑 Playlist generation done, isLoading set to false")
+            }
+        }
+    }
+
+    private suspend fun sendTidalPlaylistRequest(requestBodyString: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val client = OkHttpClient()
+            val request = Request.Builder()
+                .url("http://192.168.0.250:5050/add_playlist")
+                .post(requestBodyString.toRequestBody("application/json".toMediaType()))
+                .build()
+            client.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string()
+                if (!response.isSuccessful) throw Exception("HTTP ${response.code}")
+                responseBody
+            }
+        } catch (e: Exception) {
+            Log.e("VIBE_TIDAL", "❌ Network call fucked up: ${e.message}")
+            throw e
+        }
+    }
+    fun testTidalPlaylistRequest() {
+        viewModelScope.launch {
+            val testJson = JSONObject().apply {
+                put("name", "TestPlaylist_Kotlin")
+                put("songs", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("artist", "Glass Animals")
+                        put("title", "Gooey")
+                        put("tidal_id", 30209245)
+                    })
+                    put(JSONObject().apply {
+                        put("artist", "The Knife")
+                        put("title", "Pass This On")
+                        put("tidal_id", 241824197)
+                    })
+                    put(JSONObject().apply {
+                        put("artist", "Machel Montano")
+                        put("title", "Fast Wine")
+                        put("tidal_id", 310247914)
+                    })
+                })
+            }
+
+            val jsonString = testJson.toString()
+            Log.d("VIBE_TIDAL", "🧪 Sending test TIDAL playlist JSON: $jsonString")
+
+            try {
+                withContext(Dispatchers.IO) {
+                    val client = okhttp3.OkHttpClient()
+                    val request = okhttp3.Request.Builder()
+                        .url("http://192.168.0.250:5050/add_playlist")
+                        .post(jsonString.toRequestBody("application/json".toMediaType()))
+                        .build()
+
+                    client.newCall(request).execute().use { response ->
+                        val responseBody = response.body?.string()
+                        Log.d("VIBE_TIDAL", "📝 Test response code: ${response.code}")
+                        Log.d("VIBE_TIDAL", "📝 Test response body: $responseBody")
+
+                        if (!response.isSuccessful) {
+                            Log.e("VIBE_TIDAL", "❌ Test request failed: HTTP ${response.code}")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("VIBE_TIDAL", "💥 Test request crashed", e)
             }
         }
     }

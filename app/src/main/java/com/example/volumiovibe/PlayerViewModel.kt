@@ -27,6 +27,13 @@ class PlayerViewModel(application: Application) : AndroidViewModel(application) 
     // Declare tickJob as a class property
     private var tickJob: Job? = null
 
+    data class ResolvedTrack(
+        val artist: String,
+        val title: String,
+        val volumioUri: String? = null,
+        val tidalId: Int? = null
+    )
+
     fun maybeReconnectIfStale() {
         val now = System.currentTimeMillis()
         if (now - lastPushStateTime > 10_000) { // 10 seconds

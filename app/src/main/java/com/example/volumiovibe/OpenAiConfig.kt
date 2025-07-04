@@ -17,6 +17,7 @@ Rules:
 4. Each artist may appear a maximum of %d times.
 5. Do not include duplicate tracks.
 6. Return ONLY the list of songs. No explanations or extra text.
+7. Return ONLY the list of songs in EXACTLY this format: Artist - Title
 """.trimIndent()
 
     // --- PLAYLIST NAME PROMPT ---
