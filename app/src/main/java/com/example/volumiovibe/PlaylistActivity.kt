@@ -33,7 +33,7 @@ import androidx.compose.material3.SuggestionChip
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import com.example.volumiovibe.TrackItem
 import androidx.compose.foundation.lazy.itemsIndexed
-
+import androidx.compose.material.icons.filled.CheckCircle
 
 
 // ──────────────────── DOMAIN MODELS ────────────────────
@@ -168,6 +168,53 @@ fun PlaylistScreen(
                 }) { Text("Delete") }
             },
             dismissButton = { TextButton(onClick = { showDelete = null }) { Text("Cancel") } }
+        )
+    }
+    if (viewModel.isGeneratingPlaylist) {
+        AlertDialog(
+            onDismissRequest = {}, // not dismissable except by OK
+            title = {
+                Text(if (viewModel.playlistGenerationFinished) "Playlist Finished!" else "Generating Playlist")
+            },
+            text = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (!viewModel.playlistGenerationFinished) {
+                        LinearProgressIndicator(
+                            progress = viewModel.generationProgress,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(8.dp)
+                        )
+                        Spacer(Modifier.height(24.dp))
+                        Text(viewModel.generationStatus)
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle, // <- Use this line
+                            contentDescription = "Done",
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(Modifier.height(24.dp))
+                        Text("Your playlist is ready! All tracks have been added.")
+                    }
+                }
+            },
+            confirmButton = {
+                if (viewModel.playlistGenerationFinished) {
+                    TextButton(onClick = {
+                        viewModel.isGeneratingPlaylist = false
+                        viewModel.playlistGenerationFinished = false
+                    }) {
+                        Text("OK")
+                    }
+                } else {
+                    TextButton(onClick = {
+                        viewModel.isGeneratingPlaylist = false
+                    }) {
+                        Text("Cancel")
+                    }
+                }
+            }
         )
     }
 }

@@ -42,6 +42,11 @@ class PlaylistViewModel(application: Application) : ViewModel() {
         Log.d("OpenAiApi", "API KEY BEING USED: '${BuildConfig.OPENAI_API_KEY}'")
 //        testTidalPlaylistRequest()
     }
+    var isGeneratingPlaylist by mutableStateOf(false)
+    var generationProgress by mutableStateOf(0f) // 0.0 .. 1.0 (for progress bar)
+    var generationStatus by mutableStateOf<String>("Generating playlist...")
+    var playlistGenerationFinished by mutableStateOf(false)
+
     private val xAiApi = OpenAiApi(BuildConfig.OPENAI_API_KEY)
     private val prefs = application.getSharedPreferences("VolumioVibePrefs", Context.MODE_PRIVATE)
     private val application = application
@@ -662,7 +667,9 @@ class PlaylistViewModel(application: Application) : ViewModel() {
 
     fun generateAiPlaylist(context: Context) {
         viewModelScope.launch {
-            isLoading = true
+            isGeneratingPlaylist = true
+            generationProgress = 0f
+            generationStatus = "Starting playlist generation…"
             try {
                 Log.d("VIBE_DEBUG", "🚀 Startin’ AI playlist generation")
                 val vibe = if (selectedVibe != GrokConfig.VIBE_OPTIONS.first()) selectedVibe else vibeInput
@@ -719,6 +726,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     .take(GrokConfig.MAX_EXCLUDED_URIS)
                 Log.d("VIBE_DEBUG", "🚫 Excluded songs: ${excludedSongs.map { "${it.title} by ${it.artist}" }}")
 
+                generationStatus = "Asking AI for song list…"
                 val songList = xAiApi.generateSongList(
                     vibe = vibe,
                     numSongs = numSongsInt,
@@ -744,7 +752,14 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                 var addedTracks = 0
                 val resolvedTracks = mutableListOf<ResolvedTrack>()
                 Log.d("VIBE_TIDAL", "🔍 Startin’ track resolution for ${tracks.size} tracks")
-                for ((artist, title) in tracks) {
+                val totalTracks = tracks.size
+
+                for ((index, pair) in tracks.withIndex()) {
+                    val (artist, title) = pair
+                    generationStatus = "Searching: $artist – $title"
+                    // 🔥 Progress bar update:
+                    generationProgress = if (totalTracks == 0) 1f else ((index + 1).toFloat() / totalTracks)
+
                     val query = "$artist $title"
                     Log.d("VIBE_TIDAL", "🔎 Searchin’ Volumio for: $query")
                     search(query)
@@ -768,6 +783,9 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                         Log.w("VIBE_TIDAL", "❌ No match found for: $artist - $title")
                     }
                 }
+                // Final progress at 100% before add
+                generationProgress = 1f
+
                 Log.d("VIBE_TIDAL", "📋 Resolved tracks: ${resolvedTracks.size} (Volumio: ${resolvedTracks.count { it.volumioUri != null }}, TIDAL: ${resolvedTracks.count { it.tidalId != null }})")
 
                 val tidalTracksJson = JSONArray()
@@ -776,24 +794,29 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     var tidalId: Int? = null
 
                     if (track.volumioUri != null) {
-                        Log.d("VIBE_TIDAL", "➕ Addin’ Volumio track to $finalPlaylistName: ${track.artist} - ${track.title}")
                         addToPlaylist(finalPlaylistName, track, "song")
                         addedTracks++
+                        delay(200)
 
                         if (track.volumioUri.startsWith("tidal://song/")) {
                             tidalId = track.volumioUri.substringAfter("tidal://song/").toIntOrNull()
-                            if (tidalId == null) {
-                                Log.w("VIBE_TIDAL", "⚠️ Couldn’t extract TIDAL ID from URI: ${track.volumioUri}")
-                            }
                         }
                     }
+                    // This block ADDS all TIDAL tracks as Volumio playlist entries if there was no local match:
+                    else if (track.tidalId != null) {
+                        val tidalTrack = track.copy(volumioUri = "tidal://song/${track.tidalId}")
+                        addToPlaylist(finalPlaylistName, tidalTrack, "song")
+                        addedTracks++
+                        delay(200)
+                        tidalId = track.tidalId
+                    }
 
-                    // Fallback to track.tidalId if not from URI
                     if (tidalId == null) {
                         tidalId = track.tidalId
                     }
 
                     if (tidalId != null) {
+                        // TIDAL playlist JSON
                         tidalTracksJson.put(JSONObject().apply {
                             put("artist", track.artist)
                             put("title", track.title)
@@ -804,6 +827,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                         Log.w("VIBE_TIDAL", "⚠️ Skipped TIDAL add — no ID for: ${track.artist} - ${track.title}")
                     }
                 }
+
 
                 Log.d("VIBE_TIDAL", "📦 TIDAL tracks JSON: ${tidalTracksJson.length()} tracks prepared")
 
@@ -857,8 +881,11 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     Toast.makeText(context, "Shit broke, fam! ${e.message}", Toast.LENGTH_LONG).show()
                 }
             } finally {
-                isLoading = false
-                Log.d("VIBE_DEBUG", "🛑 Playlist generation done, isLoading set to false")
+                isGeneratingPlaylist = false
+                generationStatus = "Done!"
+                generationProgress = 1f
+                playlistGenerationFinished = true
+                Log.d("VIBE_DEBUG", "🛑 Playlist generation done, isGeneratingPlaylist set to false")
             }
         }
     }
