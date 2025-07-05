@@ -37,7 +37,7 @@ data class ResolvedTrack(
 class PlaylistViewModel(application: Application) : ViewModel() {
     private val TAG = "VIBE_DEBUG"
     private val webSocketManager = WebSocketManager
-//    private val xAiApi = XAiApi(BuildConfig.XAI_API_KEY)
+    //    private val xAiApi = XAiApi(BuildConfig.XAI_API_KEY)
     init {
         Log.d("OpenAiApi", "API KEY BEING USED: '${BuildConfig.OPENAI_API_KEY}'")
 //        testTidalPlaylistRequest()
@@ -538,33 +538,48 @@ class PlaylistViewModel(application: Application) : ViewModel() {
         Log.d(TAG, "Emitted createPlaylist: $trimmedName")
     }
 
-    fun addToPlaylist(playlistName: String, trackUri: String, trackType: String) {
+    fun addToPlaylist(
+        playlistName: String,
+        resolved: ResolvedTrack,
+        trackType: String
+    ) {
         val trimmed = playlistName.trim()
-        val service = when {
-            trackUri.startsWith("tidal://") -> "tidal"
-            else -> "mpd"
+
+        // Pull the real URI out of your ResolvedTrack
+        val uri = resolved.volumioUri ?: run {
+            Log.w(TAG, "addToPlaylist: no URI for ${resolved.artist} – ${resolved.title}")
+            return
         }
+
+        // Figure out the service based on URI
+        val service = if (uri.startsWith("tidal://")) "tidal" else "mpd"
+
+        // Emit to Volumio
         val data = JSONObject().apply {
             put("name", trimmed)
             put("service", service)
-            put("uri", trackUri)
+            put("uri", uri)
         }
         webSocketManager.emit("addToPlaylist", data)
-        Log.d(TAG, "Emitted addToPlaylist: $trimmed, $trackUri, service=$service")
+        Log.d(TAG, "Emitted addToPlaylist: $trimmed, $uri, service=$service")
+
+        // Locally update UI state with the real metadata
         val track = Track(
-            title = "Unknown Title",
-            artist = "Unknown Artist",
-            uri = trackUri,
-            service = service,
+            title    = resolved.title,
+            artist   = resolved.artist,
+            uri      = uri,
+            service  = service,
             albumArt = null,
-            type = trackType
+            type     = trackType
         )
-        playlists = playlists.map { playlist ->
-            if (playlist.name == trimmed) Playlist(playlist.name, playlist.tracks + track) else playlist
+        playlists = playlists.map { pl ->
+            if (pl.name == trimmed) Playlist(pl.name, pl.tracks + track)
+            else pl
         }
         pendingTracks[trimmed] = (pendingTracks[trimmed] ?: mutableListOf()).apply { add(track) }
         Log.d(TAG, "Locally added track to $trimmed: ${track.title} by ${track.artist}")
     }
+
 
     fun removeFromPlaylist(playlistName: String, trackUri: String) {
         val trimmed = playlistName.trim()
@@ -762,7 +777,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
 
                     if (track.volumioUri != null) {
                         Log.d("VIBE_TIDAL", "➕ Addin’ Volumio track to $finalPlaylistName: ${track.artist} - ${track.title}")
-                        addToPlaylist(finalPlaylistName, track.volumioUri, "song")
+                        addToPlaylist(finalPlaylistName, track, "song")
                         addedTracks++
 
                         if (track.volumioUri.startsWith("tidal://song/")) {
@@ -828,6 +843,14 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "Created '$finalPlaylistName': $addedTracks Volumio, ${tidalTracksJson.length()} TIDAL", Toast.LENGTH_LONG).show()
                 }
+                val refreshedTracks = fetchTracksForPlaylist(finalPlaylistName)
+                // Update UI state with the newly fetched list (with albumArt)
+                playlists = playlists.map { pl ->
+                    if (pl.name == finalPlaylistName) Playlist(pl.name, refreshedTracks)
+                    else pl
+                }
+                pendingTracks[finalPlaylistName] = refreshedTracks.toMutableList()
+                loadedPlaylists.add(finalPlaylistName)
             } catch (e: Exception) {
                 Log.e("VIBE_DEBUG", "💥 AI playlist generation crashed: ${e.message}")
                 withContext(Dispatchers.Main) {
