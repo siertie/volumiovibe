@@ -29,7 +29,9 @@
         </activity>
         <activity android:name=".SearchActivity" />
         <activity android:name=".MainActivity" />
-        <activity android:name=".PlaylistActivity" />
+        <activity
+            android:name=".PlaylistActivity"
+            android:windowSoftInputMode="adjustResize" />
     </application>
 
 </manifest>

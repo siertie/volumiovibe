@@ -33,6 +33,8 @@ import androidx.compose.material3.SuggestionChip
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import com.example.volumiovibe.TrackItem
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.CheckCircle
 
 
@@ -336,7 +338,13 @@ fun PlaylistDetailSheet(
 @Composable
 fun VibeSheetContent(viewModel: PlaylistViewModel, onClose: () -> Unit) {
     val context = LocalContext.current
-    Column(Modifier.fillMaxWidth().padding(16.dp)) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()) // Scroll that shit
+            .imePadding() // Push it up when keyboard pops
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Text("Customize your vibe", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
             IconButton(onClick = onClose) { Icon(Icons.Default.Close, contentDescription = "Close") }
