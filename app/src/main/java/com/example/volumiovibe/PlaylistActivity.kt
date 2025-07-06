@@ -36,6 +36,16 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.unit.dp
+import coil.compose.rememberAsyncImagePainter
+import androidx.compose.ui.graphics.painter.Painter
+import androidx.compose.foundation.Image
 
 
 // ──────────────────── DOMAIN MODELS ────────────────────
@@ -279,7 +289,6 @@ fun PlaylistItem(
     onPlay: () -> Unit,
     onDelete: () -> Unit
 ) {
-    // No Card, just a Row with padding, clickable
     Row(
         Modifier
             .fillMaxWidth()
@@ -287,20 +296,73 @@ fun PlaylistItem(
             .clickable { onTap() },
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            painter = painterResource(id = R.drawable.ic_album),
-            contentDescription = null
-        )
+        AlbumCollage(playlist = playlist)
         Spacer(Modifier.width(16.dp))
         Column(Modifier.weight(1f)) {
             Text(playlist.name, style = MaterialTheme.typography.titleMedium)
             Text("${playlist.tracks.size} tracks", style = MaterialTheme.typography.bodySmall)
         }
         IconButton(onClick = onPlay) {
-            Icon(painter = painterResource(id = R.drawable.ic_play), contentDescription = "Play")
+            Icon(painterResource(id = R.drawable.ic_play), contentDescription = "Play")
         }
         IconButton(onClick = onDelete) {
-            Icon(painter = painterResource(id = R.drawable.ic_delete), contentDescription = "Delete")
+            Icon(painterResource(id = R.drawable.ic_delete), contentDescription = "Delete")
+        }
+    }
+}
+
+@Composable
+fun AlbumCollage(playlist: Playlist) {
+    val tracks = playlist.tracks.take(4)
+
+    Box(Modifier.size(56.dp)) {
+        if (tracks.isEmpty()) {
+            // Fallback for empty playlist
+            Box(
+                Modifier
+                    .size(56.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_album),
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(32.dp)
+                        .align(Alignment.Center),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            tracks.forEachIndexed { index, track ->
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .offset(
+                            x = if (index % 2 == 0) 0.dp else 28.dp,
+                            y = if (index < 2) 0.dp else 28.dp
+                        )
+                        .clip(RoundedCornerShape(4.dp))
+                ) {
+                    if (track.albumArt?.isNotEmpty() == true) {
+                        Image(
+                            painter = rememberAsyncImagePainter(
+                                model = track.albumArt,
+                                error = painterResource(id = R.drawable.ic_album)
+                            ),
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                        )
+                    }
+                }
+            }
         }
     }
 }
