@@ -170,9 +170,9 @@ fun PlaylistScreen(
             dismissButton = { TextButton(onClick = { showDelete = null }) { Text("Cancel") } }
         )
     }
-    if (viewModel.isGeneratingPlaylist) {
+    if (viewModel.playlistDialogVisible) {
         AlertDialog(
-            onDismissRequest = {}, // not dismissable except by OK
+            onDismissRequest = {}, // don't dismiss by tapping outside
             title = {
                 Text(if (viewModel.playlistGenerationFinished) "Playlist Finished!" else "Generating Playlist")
             },
@@ -189,27 +189,29 @@ fun PlaylistScreen(
                         Text(viewModel.generationStatus)
                     } else {
                         Icon(
-                            imageVector = Icons.Default.CheckCircle, // <- Use this line
+                            imageVector = Icons.Default.CheckCircle,
                             contentDescription = "Done",
                             modifier = Modifier.size(48.dp),
                             tint = MaterialTheme.colorScheme.primary
                         )
                         Spacer(Modifier.height(24.dp))
-                        Text("Your playlist is ready! All tracks have been added.")
+                        Text("Your playlist is ready! All found tracks have been added.")
                     }
                 }
             },
             confirmButton = {
                 if (viewModel.playlistGenerationFinished) {
                     TextButton(onClick = {
-                        viewModel.isGeneratingPlaylist = false
-                        viewModel.playlistGenerationFinished = false
+                        viewModel.dismissPlaylistDialog()
                     }) {
                         Text("OK")
                     }
-                } else {
+                }
+            },
+            dismissButton = {
+                if (!viewModel.playlistGenerationFinished) {
                     TextButton(onClick = {
-                        viewModel.isGeneratingPlaylist = false
+                        viewModel.cancelPlaylistGeneration()
                     }) {
                         Text("Cancel")
                     }

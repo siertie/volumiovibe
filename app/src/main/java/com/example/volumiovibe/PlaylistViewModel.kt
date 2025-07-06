@@ -57,6 +57,8 @@ class PlaylistViewModel(application: Application) : ViewModel() {
     private val browseRequests = ConcurrentHashMap<String, String>()
     private var lastPlaylistStateUpdate: Long = 0
     private val loadedPlaylists = mutableSetOf<String>()
+    var playlistDialogVisible by mutableStateOf(false)
+        private set
 
     private val _selectedVibe = mutableStateOf(prefs.getString("selectedVibe", GrokConfig.VIBE_OPTIONS.first()) ?: GrokConfig.VIBE_OPTIONS.first())
     var selectedVibe: String
@@ -168,6 +170,30 @@ class PlaylistViewModel(application: Application) : ViewModel() {
             Log.e("VIBE_DEBUG", "TIDAL search failed for $query: ${e.message}")
             null
         }
+    }
+
+    fun cancelPlaylistGeneration() {
+        playlistDialogVisible = false
+        isGeneratingPlaylist = false
+        playlistGenerationFinished = false
+        generationStatus = "Cancelled."
+        generationProgress = 0f
+    }
+
+    fun showPlaylistDialog() {
+        playlistDialogVisible = true
+        isGeneratingPlaylist = true
+        playlistGenerationFinished = false
+    }
+
+    fun finishPlaylistDialog() {
+        playlistGenerationFinished = true
+    }
+
+    fun dismissPlaylistDialog() {
+        playlistDialogVisible = false
+        isGeneratingPlaylist = false
+        playlistGenerationFinished = false
     }
 
     private fun connectWebSocket() {
@@ -667,7 +693,7 @@ class PlaylistViewModel(application: Application) : ViewModel() {
 
     fun generateAiPlaylist(context: Context) {
         viewModelScope.launch {
-            isGeneratingPlaylist = true
+            showPlaylistDialog()
             generationProgress = 0f
             generationStatus = "Starting playlist generation…"
             try {
@@ -881,10 +907,9 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     Toast.makeText(context, "Shit broke, fam! ${e.message}", Toast.LENGTH_LONG).show()
                 }
             } finally {
-                isGeneratingPlaylist = false
                 generationStatus = "Done!"
                 generationProgress = 1f
-                playlistGenerationFinished = true
+                finishPlaylistDialog()
                 Log.d("VIBE_DEBUG", "🛑 Playlist generation done, isGeneratingPlaylist set to false")
             }
         }
