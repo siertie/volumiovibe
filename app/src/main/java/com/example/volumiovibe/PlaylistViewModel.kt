@@ -775,15 +775,12 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                 }.take(numSongsInt)
                 Log.d("VIBE_DEBUG", "📋 Parsed tracks: ${tracks.size} tracks: $tracks")
 
-                var addedTracks = 0
                 val resolvedTracks = mutableListOf<ResolvedTrack>()
-                Log.d("VIBE_TIDAL", "🔍 Startin’ track resolution for ${tracks.size} tracks")
                 val totalTracks = tracks.size
 
                 for ((index, pair) in tracks.withIndex()) {
                     val (artist, title) = pair
                     generationStatus = "Searching: $artist – $title"
-                    // 🔥 Progress bar update:
                     generationProgress = if (totalTracks == 0) 1f else ((index + 1).toFloat() / totalTracks)
 
                     val query = "$artist $title"
@@ -791,107 +788,114 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                     search(query)
                     val volumioResults = waitForSearchResults()
                     Log.d("VIBE_TIDAL", "📊 Volumio results: ${volumioResults.size} tracks")
+
                     val match = volumioResults
                         .filter { it.type == "song" }
                         .firstOrNull { isTrackMatch(title, artist, it.title, it.artist) }
-                    if (match != null) {
-                        Log.d("VIBE_TIDAL", "✅ Volumio match found: ${match.artist} - ${match.title} (URI: ${match.uri})")
-                        resolvedTracks.add(ResolvedTrack(artist, title, volumioUri = match.uri))
-                        continue
-                    }
 
-                    Log.d("VIBE_TIDAL", "🔎 No Volumio match, searchin’ TIDAL for: $artist - $title")
-                    val tidalResult = searchTidalTrack("$artist - $title")
-                    if (tidalResult != null) {
-                        Log.d("VIBE_TIDAL", "✅ TIDAL match found: ${tidalResult.artist} - ${tidalResult.title} (TIDAL ID: ${tidalResult.tidalId})")
-                        resolvedTracks.add(tidalResult.copy(artist = artist, title = title))
-                    } else {
-                        Log.w("VIBE_TIDAL", "❌ No match found for: $artist - $title")
-                    }
-                }
-                // Final progress at 100% before add
-                generationProgress = 1f
-
-                Log.d("VIBE_TIDAL", "📋 Resolved tracks: ${resolvedTracks.size} (Volumio: ${resolvedTracks.count { it.volumioUri != null }}, TIDAL: ${resolvedTracks.count { it.tidalId != null }})")
-
-                val tidalTracksJson = JSONArray()
-
-                for (track in resolvedTracks) {
+                    var volumioUri: String? = null
                     var tidalId: Int? = null
 
-                    if (track.volumioUri != null) {
-                        addToPlaylist(finalPlaylistName, track, "song")
-                        addedTracks++
-                        delay(200)
-
-                        if (track.volumioUri.startsWith("tidal://song/")) {
-                            tidalId = track.volumioUri.substringAfter("tidal://song/").toIntOrNull()
+                    if (match != null) {
+                        if (match.uri.startsWith("tidal://song/")) {
+                            // TIDAL track found on Volumio
+                            volumioUri = match.uri
+                            tidalId = match.uri.substringAfter("tidal://song/").toIntOrNull()
+                        } else {
+                            // Local file found, use only local for Volumio!
+                            volumioUri = match.uri
+                            // Still check TIDAL for the TIDAL playlist (not for Volumio)
+                            val tidalResult = searchTidalTrack("$artist - $title")
+                            if (tidalResult?.tidalId != null) {
+                                tidalId = tidalResult.tidalId
+                            }
+                        }
+                    } else {
+                        // Not found on Volumio, try TIDAL (for both playlists)
+                        val tidalResult = searchTidalTrack("$artist - $title")
+                        if (tidalResult?.tidalId != null) {
+                            volumioUri = "tidal://song/${tidalResult.tidalId}"
+                            tidalId = tidalResult.tidalId
                         }
                     }
-                    // This block ADDS all TIDAL tracks as Volumio playlist entries if there was no local match:
-                    else if (track.tidalId != null) {
-                        val tidalTrack = track.copy(volumioUri = "tidal://song/${track.tidalId}")
-                        addToPlaylist(finalPlaylistName, tidalTrack, "song")
-                        addedTracks++
-                        delay(200)
-                        tidalId = track.tidalId
-                    }
 
-                    if (tidalId == null) {
-                        tidalId = track.tidalId
+                    if (volumioUri != null || tidalId != null) {
+                        resolvedTracks.add(
+                            ResolvedTrack(
+                                artist = artist,
+                                title = title,
+                                volumioUri = volumioUri,
+                                tidalId = tidalId
+                            )
+                        )
+                    } else {
+                        Log.w("VIBE_TIDAL", "❌ No match found for: $artist - $title")
+                        generationStatus = "$artist - $title not found"
+                        delay(900)
                     }
+                }
 
+                // Final progress at 100% before add
+                generationProgress = 1f
+                Log.d("VIBE_TIDAL", "📋 Resolved tracks: ${resolvedTracks.size} (Volumio: ${resolvedTracks.count { it.volumioUri != null }}, TIDAL: ${resolvedTracks.count { it.tidalId != null }})")
+
+                // TIDAL playlist JSON: all tracks with a TIDAL ID
+                val tidalTracksJson = JSONArray()
+                for (track in resolvedTracks) {
+                    val tidalId = track.tidalId
                     if (tidalId != null) {
-                        // TIDAL playlist JSON
                         tidalTracksJson.put(JSONObject().apply {
                             put("artist", track.artist)
                             put("title", track.title)
                             put("tidal_id", tidalId)
                         })
-                        Log.d("VIBE_TIDAL", "🎯 Queued for TIDAL: ${track.artist} - ${track.title} (ID: $tidalId)")
-                    } else {
-                        Log.w("VIBE_TIDAL", "⚠️ Skipped TIDAL add — no ID for: ${track.artist} - ${track.title}")
                     }
                 }
 
+                // Add all to Volumio playlist
+                val volumioTracks = resolvedTracks.filter { it.volumioUri != null }
 
-                Log.d("VIBE_TIDAL", "📦 TIDAL tracks JSON: ${tidalTracksJson.length()} tracks prepared")
-
-                if (tidalTracksJson.length() > 0) {
-                    val requestBodyString = JSONObject().apply {
-                        put("name", finalPlaylistName)
-                        put("songs", tidalTracksJson)
-                    }.toString()
-
-                    Log.d("VIBE_TIDAL", "📤 Sending TIDAL playlist request: $requestBodyString")
-
-                    try {
-                        val responseBody = sendTidalPlaylistRequest(requestBodyString)
-                        val json = JSONObject(responseBody ?: "{}")
-                        val status = json.optString("status", "unknown")
-                        val addedTracksTidal = json.optInt("added_tracks", -1)
-                        Log.d("VIBE_TIDAL", "📊 TIDAL response parsed - status: $status, added_tracks: $addedTracksTidal")
-
-                        if (status != "success" || addedTracksTidal <= 0) {
-                            val errorMsg = json.optString("error", "No tracks added or unknown error")
-                            Log.e("VIBE_TIDAL", "❌ TIDAL playlist add failed: $errorMsg")
-                            throw Exception("TIDAL error: $errorMsg")
-                        }
-
-                        Log.d("VIBE_TIDAL", "✅ TIDAL playlist '$finalPlaylistName' created with $addedTracksTidal tracks")
-                    } catch (e: Exception) {
-                        Log.e("VIBE_TIDAL", "❌ Exception addin’ TIDAL playlist", e)
-                        withContext(Dispatchers.Main) {
-                            Toast.makeText(context, "TIDAL playlist failed: ${e.message}", Toast.LENGTH_LONG).show()
+                // Parallel add to both
+                val volumioAddJob = async {
+                    generationStatus = "Adding tracks to Volumio…"
+                    for (track in volumioTracks) {
+                        addToPlaylist(finalPlaylistName, track, "song")
+                        delay(150)  // 100–250 ms is typical; tune to taste
+                    }
+                }
+                val tidalAddJob = async {
+                    if (tidalTracksJson.length() > 0) {
+                        generationStatus = "Adding tracks to TIDAL…"
+                        val requestBodyString = JSONObject().apply {
+                            put("name", finalPlaylistName)
+                            put("songs", tidalTracksJson)
+                        }.toString()
+                        try {
+                            val responseBody = sendTidalPlaylistRequest(requestBodyString)
+                            val json = JSONObject(responseBody ?: "{}")
+                            val status = json.optString("status", "unknown")
+                            val addedTracksTidal = json.optInt("added_tracks", -1)
+                            if (status != "success" || addedTracksTidal <= 0) {
+                                val errorMsg = json.optString("error", "No tracks added or unknown error")
+                                Log.e("VIBE_TIDAL", "❌ TIDAL playlist add failed: $errorMsg")
+                                throw Exception("TIDAL error: $errorMsg")
+                            }
+                            Log.d("VIBE_TIDAL", "✅ TIDAL playlist '$finalPlaylistName' created with $addedTracksTidal tracks")
+                        } catch (e: Exception) {
+                            Log.e("VIBE_TIDAL", "❌ Exception addin’ TIDAL playlist", e)
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(context, "TIDAL playlist failed: ${e.message}", Toast.LENGTH_LONG).show()
+                            }
                         }
                     }
-                } else {
-                    Log.w("VIBE_TIDAL", "⚠️ No TIDAL tracks to send, skippin’ TIDAL playlist creation")
                 }
+                awaitAll(volumioAddJob, tidalAddJob)
+                generationStatus = "Playlist created!"
 
-                Log.d("VIBE_DEBUG", "🏁 Final track count: $addedTracks/$numSongsInt Volumio, ${tidalTracksJson.length()}/$numSongsInt TIDAL")
+
+                Log.d("VIBE_DEBUG", "🏁 Final track count: ${volumioTracks.size} Volumio, ${tidalTracksJson.length()}/$numSongsInt TIDAL")
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Created '$finalPlaylistName': $addedTracks Volumio, ${tidalTracksJson.length()} TIDAL", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "Created '$finalPlaylistName': ${volumioTracks.size} Volumio, ${tidalTracksJson.length()}TIDAL", Toast.LENGTH_LONG).show()
                 }
                 val refreshedTracks = fetchTracksForPlaylist(finalPlaylistName)
                 // Update UI state with the newly fetched list (with albumArt)
@@ -902,14 +906,16 @@ class PlaylistViewModel(application: Application) : ViewModel() {
                 pendingTracks[finalPlaylistName] = refreshedTracks.toMutableList()
                 loadedPlaylists.add(finalPlaylistName)
             } catch (e: Exception) {
-                Log.e("VIBE_DEBUG", "💥 AI playlist generation crashed: ${e.message}")
+                Log.e("VIBE_TIDAL", "❌ Playlist generation failed: ${e.message}")
+                generationStatus = "Generation failed: ${e.message}"
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "Shit broke, fam! ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, "Playlist generation failed: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             } finally {
                 generationStatus = "Done!"
                 generationProgress = 1f
                 finishPlaylistDialog()
+                playlistGenerationFinished = true
                 Log.d("VIBE_DEBUG", "🛑 Playlist generation done, isGeneratingPlaylist set to false")
             }
         }
