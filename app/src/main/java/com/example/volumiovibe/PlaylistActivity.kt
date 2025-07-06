@@ -111,13 +111,26 @@ fun PlaylistScreen(
     }
 
     Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Playlists", style = MaterialTheme.typography.headlineSmall) },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                )
+            )
+        },
         floatingActionButton = {
             FloatingActionButton(onClick = { showSheet = true }) {
                 Icon(painter = painterResource(id = R.drawable.ic_add_playlist), contentDescription = "New playlist")
             }
         }
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+        ) {
             PlaylistsSection(
                 viewModel = viewModel,
                 onPlaylistTap = { playlist ->
@@ -232,22 +245,27 @@ fun PlaylistsSection(
     onDelete: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Card(modifier = modifier) {
-        Column {
-            ListItem(headlineContent = { Text("Your Playlists") })
-            Divider()
-            when {
-                viewModel.isLoading -> Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-                viewModel.playlists.isEmpty() -> Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) { Text("No playlists yet! Tap the + button to start.") }
-                else -> LazyColumn(Modifier.fillMaxWidth()) {
-                    items(viewModel.playlists) { playlist ->
-                        PlaylistItem(
-                            playlist = playlist,
-                            onTap = { onPlaylistTap(playlist) },
-                            onPlay = { viewModel.playPlaylist(playlist.name) },
-                            onDelete = { onDelete(playlist.name) }
-                        )
-                    }
+    // Put the section in a Column, no Card
+    Column(modifier = modifier) {
+//        HorizontalDivider()
+        when {
+            viewModel.isLoading -> Box(
+                Modifier.fillMaxWidth().height(200.dp),
+                contentAlignment = Alignment.Center
+            ) { CircularProgressIndicator() }
+            viewModel.playlists.isEmpty() -> Box(
+                Modifier.fillMaxWidth().height(200.dp),
+                contentAlignment = Alignment.Center
+            ) { Text("No playlists yet! Tap the + button to start.") }
+            else -> LazyColumn(Modifier.fillMaxWidth()) {
+                items(viewModel.playlists) { playlist ->
+                    PlaylistItem(
+                        playlist = playlist,
+                        onTap = { onPlaylistTap(playlist) },
+                        onPlay = { viewModel.playPlaylist(playlist.name) },
+                        onDelete = { onDelete(playlist.name) }
+                    )
+                    HorizontalDivider()
                 }
             }
         }
@@ -261,23 +279,32 @@ fun PlaylistItem(
     onPlay: () -> Unit,
     onDelete: () -> Unit
 ) {
-    Card(
+    // No Card, just a Row with padding, clickable
+    Row(
         Modifier
-            .padding(8.dp)
-            .clickable { onTap() }
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp, vertical = 12.dp)
+            .clickable { onTap() },
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Icon(painter = painterResource(id = R.drawable.ic_album), contentDescription = null)
-            Spacer(Modifier.width(16.dp))
-            Column(Modifier.weight(1f)) {
-                Text(playlist.name, style = MaterialTheme.typography.titleMedium)
-                Text("${playlist.tracks.size} tracks", style = MaterialTheme.typography.bodySmall)
-            }
-            IconButton(onClick = onPlay) { Icon(painter = painterResource(id = R.drawable.ic_play), contentDescription = "Play") }
-            IconButton(onClick = onDelete) { Icon(painter = painterResource(id = R.drawable.ic_delete), contentDescription = "Delete") }
+        Icon(
+            painter = painterResource(id = R.drawable.ic_album),
+            contentDescription = null
+        )
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(playlist.name, style = MaterialTheme.typography.titleMedium)
+            Text("${playlist.tracks.size} tracks", style = MaterialTheme.typography.bodySmall)
+        }
+        IconButton(onClick = onPlay) {
+            Icon(painter = painterResource(id = R.drawable.ic_play), contentDescription = "Play")
+        }
+        IconButton(onClick = onDelete) {
+            Icon(painter = painterResource(id = R.drawable.ic_delete), contentDescription = "Delete")
         }
     }
 }
+
 
 // ──────────────────── PLAYLIST DETAIL SHEET ────────────────────
 
