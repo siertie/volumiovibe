@@ -46,6 +46,9 @@ import androidx.compose.ui.unit.dp
 import coil.compose.rememberAsyncImagePainter
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.foundation.Image
+import coil.compose.AsyncImage
+import coil.request.CachePolicy
+import coil.request.ImageRequest
 
 
 // ──────────────────── DOMAIN MODELS ────────────────────
@@ -314,58 +317,43 @@ fun PlaylistItem(
 @Composable
 fun AlbumCollage(playlist: Playlist) {
     val tracks = playlist.tracks.take(4)
-
-    Box(Modifier.size(56.dp)) {
+    val size = 64.dp
+    val quadrantSize = 32.dp
+    val shapes = listOf(
+        RoundedCornerShape(topStart = 12.dp),      // 0: top-left
+        RoundedCornerShape(topEnd = 12.dp),        // 1: top-right
+        RoundedCornerShape(bottomStart = 12.dp),   // 2: bottom-left
+        RoundedCornerShape(bottomEnd = 12.dp)      // 3: bottom-right
+    )
+    Box(Modifier.size(size)) {
         if (tracks.isEmpty()) {
-            // Fallback for empty playlist
-            Box(
-                Modifier
-                    .size(56.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-            ) {
-                Icon(
-                    painter = painterResource(id = R.drawable.ic_album),
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(32.dp)
-                        .align(Alignment.Center),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            // same as before: placeholder
         } else {
-            tracks.forEachIndexed { index, track ->
-                Box(
+            for (i in 0 until tracks.size) {
+                val x = if (i % 2 == 0) 0.dp else quadrantSize
+                val y = if (i < 2) 0.dp else quadrantSize
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(Utils.getAlbumArt(tracks[i]))
+                        .size(32, 32)
+                        .crossfade(true)
+                        .memoryCachePolicy(CachePolicy.ENABLED)
+                        .diskCachePolicy(CachePolicy.ENABLED)
+                        .build(),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
                     modifier = Modifier
-                        .size(28.dp)
-                        .offset(
-                            x = if (index % 2 == 0) 0.dp else 28.dp,
-                            y = if (index < 2) 0.dp else 28.dp
-                        )
-                        .clip(RoundedCornerShape(4.dp))
-                ) {
-                    if (track.albumArt?.isNotEmpty() == true) {
-                        Image(
-                            painter = rememberAsyncImagePainter(
-                                model = track.albumArt,
-                                error = painterResource(id = R.drawable.ic_album)
-                            ),
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        Box(
-                            Modifier
-                                .fillMaxSize()
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                        )
-                    }
-                }
+                        .size(quadrantSize)
+                        .offset(x, y)
+                        .clip(shapes[i]),
+                    placeholder = painterResource(id = R.drawable.ic_album),
+                    error = painterResource(id = R.drawable.ic_album)
+                )
             }
         }
     }
 }
+
 
 
 // ──────────────────── PLAYLIST DETAIL SHEET ────────────────────

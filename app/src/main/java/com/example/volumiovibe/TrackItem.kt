@@ -40,14 +40,9 @@ fun TrackItem(
                 .padding(12.dp)
         ) {
             val (albumArt, titleText, artistText, buttons) = createRefs()
-            val albumArtUrl = when {
-                track.albumArt.isNullOrEmpty() -> "https://via.placeholder.com/64"
-                track.albumArt.startsWith("http") -> track.albumArt
-                else -> "http://192.168.0.250:3000${track.albumArt}"
-            }
             AsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)
-                    .data(albumArtUrl)
+                    .data(Utils.getAlbumArt(track))
                     .size(64, 64)
                     .crossfade(true)
                     .memoryCachePolicy(CachePolicy.ENABLED)
