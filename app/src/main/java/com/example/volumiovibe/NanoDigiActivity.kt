@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import kotlin.math.roundToInt
@@ -384,6 +385,7 @@ class NanoDigiActivity : BaseActivity() {
         Row(
             modifier = Modifier
                 .fillMaxSize()
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                 .padding(WindowInsets.systemBars.asPaddingValues())
                 .padding(16.dp)
         ) {
@@ -412,6 +414,9 @@ class NanoDigiActivity : BaseActivity() {
                 // --- Preset Card ---
                 Card(
                     modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface // Or surfaceContainerLow, see below
+                    ),
                     elevation = CardDefaults.cardElevation()
                 ) {
                     Column(Modifier.padding(16.dp)) {
@@ -434,6 +439,9 @@ class NanoDigiActivity : BaseActivity() {
                 // --- Source Card ---
                 Card(
                     modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface // Or surfaceContainerLow, see below
+                    ),
                     elevation = CardDefaults.cardElevation()
                 ) {
                     Column(Modifier.padding(16.dp)) {
@@ -456,6 +464,9 @@ class NanoDigiActivity : BaseActivity() {
                 // --- Output Card ---
                 Card(
                     modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface // Or surfaceContainerLow, see below
+                    ),
                     elevation = CardDefaults.cardElevation()
                 ) {
                     Column(Modifier.padding(16.dp)) {
