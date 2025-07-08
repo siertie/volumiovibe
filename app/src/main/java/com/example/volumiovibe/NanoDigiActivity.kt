@@ -37,7 +37,8 @@ import androidx.compose.material.icons.filled.VolumeOff
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-
+import androidx.compose.material.icons.filled.Tv
+import androidx.compose.material.icons.filled.MusicNote
 
 private fun setDevice(
     profile: String,
@@ -77,7 +78,6 @@ private fun setDevice(
     })
 }
 
-
 fun dbToPercent(db: Float): Int {
     return ((db + 100) / 100f * 100).toInt().coerceIn(0, 100)
 }
@@ -86,7 +86,6 @@ fun percentToDb(percent: Int): Float {
     return (percent / 100f) * 100f - 100f
 }
 
-
 @Composable
 fun SelectableChip(
     label: String,
@@ -94,11 +93,11 @@ fun SelectableChip(
     onClick: () -> Unit
 ) {
     FilterChip(
-        selected,           // Boolean (selected)
-        onClick,            // () -> Unit
-        { Text(label) },    // @Composable label
-        Modifier,           // Modifier
-        true,               // Boolean (enabled)
+        selected,
+        onClick,
+        { Text(label) },
+        Modifier,
+        true,
         colors = FilterChipDefaults.filterChipColors(
             selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.20f),
             selectedLabelColor = MaterialTheme.colorScheme.primary,
@@ -106,8 +105,8 @@ fun SelectableChip(
             labelColor = MaterialTheme.colorScheme.onSurface
         ),
         border = FilterChipDefaults.filterChipBorder(
-            selected, // required
-            true,     // required, always enabled for you
+            selected,
+            true,
             borderColor = MaterialTheme.colorScheme.outline,
             selectedBorderColor = MaterialTheme.colorScheme.primary,
             borderWidth = 1.dp,
@@ -115,6 +114,7 @@ fun SelectableChip(
         )
     )
 }
+
 @Composable
 fun VerticalVolumeSlider(
     value: Float,
@@ -126,14 +126,14 @@ fun VerticalVolumeSlider(
     thumbColor: Color,
     trackWidth: Dp = 8.dp,
     thumbRadius: Dp = 16.dp,
-    modifier: Modifier = Modifier  // <-- add this
+    modifier: Modifier = Modifier
 ) {
     val density = LocalDensity.current
     var isDragging by remember { mutableStateOf(false) }
     var dragValue by remember { mutableStateOf(value) }
 
     BoxWithConstraints(
-        modifier = modifier,         // <-- use the passed-in modifier!
+        modifier = modifier,
         contentAlignment = Alignment.Center
     ) {
         val sliderHeightPx = with(density) { maxHeight.toPx() }
@@ -183,7 +183,6 @@ fun VerticalVolumeSlider(
     }
 }
 
-
 class NanoDigiActivity : BaseActivity() {
     private val TAG = "NanoDigiActivity"
     private val DEBUG_TAG = "NanoDigiDebug"
@@ -206,15 +205,120 @@ class NanoDigiActivity : BaseActivity() {
             val coroutineScope = rememberCoroutineScope()
             val context = LocalContext.current
 
+            // Logic control state
+            var tvActive by remember { mutableStateOf(false) }
+            var musicActive by remember { mutableStateOf(false) }
+
+            // --- API: Get state from server ---
+            fun updateStateFromServer() {
+                coroutineScope.launch {
+                    try {
+                        val body = withContext(Dispatchers.IO) {
+                            val request = Request.Builder()
+                                .url("http://192.168.0.240:5000/device_states")
+                                .get()
+                                .build()
+                            client.newCall(request).execute().use { it.body?.string() }
+                        }
+                        val json = JSONObject(body ?: "{}")
+                        val devices = json.optJSONArray("devices") ?: return@launch
+
+                        for (i in 0 until devices.length()) {
+                            val device = devices.getJSONObject(i)
+                            if (device.optString("name") == "Stekkerdoos") {
+                                val channels = device.optJSONArray("channels") ?: continue
+                                var tv = false
+                                var shield = false
+                                for (j in 0 until channels.length()) {
+                                    val channel = channels.getJSONObject(j)
+                                    val name = channel.optString("name")
+                                    val isOn = channel.optBoolean("is_on", false)
+                                    if (name == "TV") tv = isOn
+                                    if (name == "Shield TV") shield = isOn
+                                }
+                                tvActive = tv && shield
+                                musicActive = !tv && shield
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e("NanoDigiDebug", "State fetch failed", e)
+                    }
+                }
+            }
+
+            // --- API: Control plug ---
+            fun controlPlug(channelName: String, action: String) {
+                val channelIndex = when (channelName) {
+                    "TV" -> 2
+                    "Shield TV" -> 4
+                    else -> return
+                }
+                coroutineScope.launch {
+                    withContext(Dispatchers.IO) {
+                        val json = JSONObject().apply {
+                            put("device", "Stekkerdoos")
+                            put("channel", channelIndex)
+                            put("action", action)
+                        }
+                        val body = json.toString().toRequestBody("application/json".toMediaType())
+                        val request = Request.Builder()
+                            .url("http://192.168.0.240:5000/plug")
+                            .post(body)
+                            .build()
+                        client.newCall(request).execute().close()
+                    }
+                    delay(200)
+                    updateStateFromServer()
+                }
+            }
+
+            // --- Logic control handlers ---
+            val onTvPressed = {
+                if (tvActive) {
+                    controlPlug("Shield TV", "off")
+                } else {
+                    controlPlug("TV", "on")
+                    controlPlug("Shield TV", "on")
+                }
+                // Always set output, even if already selected:
+                output = "Shield TV"
+                val dev = reverseOutputMap["Shield TV"] ?: "hw:sndrpihifiberry,0,0"
+                setDevice("default", dev, context)
+            }
+
+            val onMusicPressed = {
+                if (musicActive) {
+                    // Turn off Shield TV if Music is active and button pressed (turns music mode off)
+                    controlPlug("Shield TV", "off")
+                } else {
+                    if (tvActive) {
+                        // TV mode was ON, so just turn off TV, leave Shield TV ON
+                        controlPlug("TV", "off")
+                    } else {
+                        // Not in TV mode, so ensure Shield TV is ON (music mode ON)
+                        controlPlug("Shield TV", "on")
+                    }
+                }
+                // Always set output
+                output = "Volumio"
+                val dev = reverseOutputMap["Volumio"] ?: "hw:Loopback,1,0"
+                setDevice("default", dev, context)
+            }
+
             // ---- SYNC ALL STATE FROM BACKEND ----
             LaunchedEffect(Unit) {
-                fetchAllState(coroutineScope, context, outputMap) { newConfig, newSource, newVolume, newMute, newOutput ->
+                fetchAllState(
+                    coroutineScope,
+                    context,
+                    outputMap
+                ) { newConfig, newSource, newVolume, newMute, newOutput ->
                     config = newConfig
                     source = newSource
                     volume = newVolume
                     mute = newMute
                     output = newOutput
                 }
+                updateStateFromServer()
             }
             // --------------------------------------
 
@@ -241,15 +345,16 @@ class NanoDigiActivity : BaseActivity() {
                     },
                     output = output,
                     onOutputSelected = { out ->
-                        output = out  // Optimistic UI update
+                        output = out
                         val dev = reverseOutputMap[out] ?: "hw:sndrpihifiberry,0,0"
                         setDevice("default", dev, context)
-                        // Delay fetch to allow backend to update (250ms is usually enough)
-                        coroutineScope.launch {
-                            delay(250)
-                        }
+                        coroutineScope.launch { delay(250) }
                     },
-                    sendConfig = { v -> sendConfig(coroutineScope, context, volume = v) }
+                    sendConfig = { v -> sendConfig(coroutineScope, context, volume = v) },
+                    tvActive = tvActive,
+                    musicActive = musicActive,
+                    onTvPressed = onTvPressed,
+                    onMusicPressed = onMusicPressed
                 )
             }
         }
@@ -375,12 +480,38 @@ class NanoDigiActivity : BaseActivity() {
         onMuteToggle: () -> Unit,
         output: String,
         onOutputSelected: (String) -> Unit,
-        sendConfig: (Float) -> Unit, // expects: sendConfig(volume)
+        sendConfig: (Float) -> Unit,
+        tvActive: Boolean,
+        musicActive: Boolean,
+        onTvPressed: () -> Unit,
+        onMusicPressed: () -> Unit
     ) {
         // Dialog state for volume confirmation
         var showVolumeDialog by remember { mutableStateOf(false) }
         var pendingVolume by remember { mutableStateOf(volume) }
         var previousVolume by remember { mutableStateOf(volume) }
+
+        // Debounced volume
+        var debouncedVolume by remember { mutableStateOf(volume) }
+
+        // Only update volume externally if not in confirmation
+        LaunchedEffect(volume) {
+            if (!showVolumeDialog) {
+                // Debounce: only send config after 500ms of no changes
+                delay(500)
+                if (debouncedVolume != volume) {
+                    if (volume > -20f) {
+                        // Prompt confirmation
+                        pendingVolume = volume
+                        showVolumeDialog = true
+                    } else {
+                        debouncedVolume = volume
+                        sendConfig(volume)
+                        previousVolume = volume
+                    }
+                }
+            }
+        }
 
         Row(
             modifier = Modifier
@@ -411,16 +542,51 @@ class NanoDigiActivity : BaseActivity() {
 
                 Spacer(modifier = Modifier.height(16.dp))
 
+                // --- Logic Card ---
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 16.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("Vibe Switcher", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                            Button(
+                                onClick = onTvPressed,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (tvActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
+                                Icon(Icons.Default.Tv, contentDescription = "TV")
+                                Spacer(Modifier.width(8.dp))
+                                Text("TV")
+                            }
+                            Button(
+                                onClick = onMusicPressed,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (musicActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
+                                Icon(Icons.Default.MusicNote, contentDescription = "Music")
+                                Spacer(Modifier.width(8.dp))
+                                Text("Music")
+                            }
+                        }
+                    }
+                }
+
                 // --- Preset Card ---
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface // Or surfaceContainerLow, see below
+                        containerColor = MaterialTheme.colorScheme.surface
                     ),
                     elevation = CardDefaults.cardElevation()
                 ) {
                     Column(Modifier.padding(16.dp)) {
-                        Text("Preset", style = MaterialTheme.typography.titleMedium)
+                        Text("Sound Profile", style = MaterialTheme.typography.titleMedium)
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             (0..3).forEach { idx ->
@@ -440,12 +606,12 @@ class NanoDigiActivity : BaseActivity() {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface // Or surfaceContainerLow, see below
+                        containerColor = MaterialTheme.colorScheme.surface
                     ),
                     elevation = CardDefaults.cardElevation()
                 ) {
                     Column(Modifier.padding(16.dp)) {
-                        Text("Source", style = MaterialTheme.typography.titleMedium)
+                        Text("Input Source", style = MaterialTheme.typography.titleMedium)
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             listOf("Toslink", "Spdif").forEach { src ->
@@ -465,12 +631,12 @@ class NanoDigiActivity : BaseActivity() {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.surface // Or surfaceContainerLow, see below
+                        containerColor = MaterialTheme.colorScheme.surface
                     ),
                     elevation = CardDefaults.cardElevation()
                 ) {
                     Column(Modifier.padding(16.dp)) {
-                        Text("Output", style = MaterialTheme.typography.titleMedium)
+                        Text("Playback Device", style = MaterialTheme.typography.titleMedium)
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             listOf("Shield TV", "Volumio").forEach { out ->
@@ -509,7 +675,6 @@ class NanoDigiActivity : BaseActivity() {
                         )
                     }
 
-                    // Let the slider fill available height, but not overlap icon or text
                     VerticalVolumeSlider(
                         value = volume,
                         valueRange = -100f..0f,
@@ -519,19 +684,14 @@ class NanoDigiActivity : BaseActivity() {
                             pendingVolume = newVol
                         },
                         onValueChangeFinished = {
-                            if (pendingVolume > -20f) {
-                                showVolumeDialog = true
-                            } else {
-                                sendConfig(pendingVolume)
-                                previousVolume = pendingVolume
-                            }
+                            // No-op: handled by debounce logic
                         },
                         trackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f),
                         thumbColor = MaterialTheme.colorScheme.primary,
                         trackWidth = 8.dp,
                         thumbRadius = 16.dp,
                         modifier = Modifier
-                            .weight(1f)        // <-- this is KEY, makes it take all available space!
+                            .weight(1f)
                             .width(48.dp)
                     )
 
@@ -543,7 +703,7 @@ class NanoDigiActivity : BaseActivity() {
                 }
             }
 
-            // --- Confirmation Dialog ---
+            // --- Confirmation Dialog for Loud Volume ---
             if (showVolumeDialog) {
                 AlertDialog(
                     onDismissRequest = {
@@ -552,7 +712,6 @@ class NanoDigiActivity : BaseActivity() {
                     },
                     title = { Text("Are you sure?") },
                     text = { Text("Volume will be set at ${pendingVolume.toInt()} dB") },
-                    // Cancel first, styled as filled Button
                     dismissButton = {
                         Button(
                             onClick = {
@@ -563,11 +722,11 @@ class NanoDigiActivity : BaseActivity() {
                             Text("Cancel")
                         }
                     },
-                    // Confirm second, styled as plain TextButton
                     confirmButton = {
                         TextButton(onClick = {
                             sendConfig(pendingVolume)
                             previousVolume = pendingVolume
+                            debouncedVolume = pendingVolume
                             showVolumeDialog = false
                         }) {
                             Text("Yes, set volume")

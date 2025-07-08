@@ -2,6 +2,7 @@
 <network-security-config>
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">192.168.0.250</domain>
+        <domain includeSubdomains="false">192.168.0.240</domain>
         <domain includeSubdomains="true">volumio.local</domain>
     </domain-config>
 </network-security-config>
