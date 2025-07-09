@@ -247,6 +247,28 @@ class NanoDigiActivity : BaseActivity() {
                 }
             }
 
+            fun refreshAll() {
+                fetchAllState(
+                    coroutineScope,
+                    context,
+                    outputMap
+                ) { newConfig, newSource, newVolume, newMute, newOutput ->
+                    config = newConfig
+                    source = newSource
+                    volume = newVolume
+                    mute = newMute
+                    output = newOutput
+                }
+                updateStateFromServer()
+            }
+
+            LaunchedEffect(Unit) {
+                while (true) {
+                    refreshAll()
+                    delay(1500) // 5 seconds, tweak as needed
+                }
+            }
+
             // --- API: Control plug ---
             fun controlPlug(channelName: String, action: String) {
                 val channelIndex = when (channelName) {
