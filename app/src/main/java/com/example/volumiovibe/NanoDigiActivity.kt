@@ -39,6 +39,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material.icons.filled.MusicNote
+import org.json.JSONArray
 
 private fun setDevice(
     profile: String,
@@ -272,13 +273,47 @@ class NanoDigiActivity : BaseActivity() {
                 }
             }
 
+            fun controlPlugs(actions: List<Pair<String, String>>) {
+                coroutineScope.launch {
+                    withContext(Dispatchers.IO) {
+                        val actionsJson = actions.map {
+                            val channel = when (it.first) {
+                                "TV" -> 2
+                                "Shield TV" -> 4
+                                else -> 0
+                            }
+                            JSONObject().apply {
+                                put("channel", channel)
+                                put("action", it.second)
+                            }
+                        }
+                        val bodyJson = JSONObject().apply {
+                            put("device", "Stekkerdoos")
+                            put("actions", JSONArray(actionsJson))
+                        }
+                        val body = bodyJson.toString().toRequestBody("application/json".toMediaType())
+                        val request = Request.Builder()
+                            .url("http://192.168.0.240:5000/plugs")
+                            .post(body)
+                            .build()
+                        client.newCall(request).execute().close()
+                    }
+                    delay(200)
+                    updateStateFromServer()
+                }
+            }
+
             // --- Logic control handlers ---
             val onTvPressed = {
                 if (tvActive) {
                     controlPlug("Shield TV", "off")
                 } else {
-                    controlPlug("TV", "on")
-                    controlPlug("Shield TV", "on")
+                    controlPlugs(
+                        listOf(
+                            "TV" to "on",
+                            "Shield TV" to "on"
+                        )
+                    )
                 }
                 // Always set output, even if already selected:
                 output = "Shield TV"
