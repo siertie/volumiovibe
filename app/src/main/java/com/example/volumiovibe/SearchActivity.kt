@@ -63,6 +63,8 @@ class SearchActivity : BaseActivity() {
         var ignoreSeekUpdates by remember { mutableStateOf(false) }
         val coroutineScope = rememberCoroutineScope()
         val context = LocalContext.current
+        var infinityMode by remember { mutableStateOf(false) }
+
 
         LaunchedEffect(query) {
             SearchStateHolder.query = query
@@ -171,7 +173,12 @@ class SearchActivity : BaseActivity() {
                             delay(1000)
                             WebSocketManager.emit("getState")
                         }
-                    }
+                    },
+                    onToggleInfinity = {
+                        infinityMode = !infinityMode
+                        WebSocketManager.emit("enableDynamicMode", infinityMode)
+                    },
+                    infinityMode = infinityMode
                 )
             }
         ) { padding ->

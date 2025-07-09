@@ -591,7 +591,7 @@ class NanoDigiActivity : BaseActivity() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "nanoDIGI Remote",
+                        text = "Remote",
                         style = MaterialTheme.typography.headlineMedium,
                         color = MaterialTheme.colorScheme.primary
                     )

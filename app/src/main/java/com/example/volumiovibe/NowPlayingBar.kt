@@ -34,6 +34,7 @@ fun NowPlayingBar(
 
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
+    var infinityMode by remember { mutableStateOf(false) }
 
     PlayerControls(
         statusText = statusText,
@@ -130,6 +131,11 @@ fun NowPlayingBar(
                 }
             }
         },
+        onToggleInfinity = {
+            infinityMode = !infinityMode
+            WebSocketManager.emit("enableDynamicMode", infinityMode)
+        },
+        infinityMode = infinityMode,
         modifier = modifier,
         controlsEnabled = playerReady,
         disabledReason = if (!playerReady) "Yo, no track loaded or player disconnected!" else null

@@ -11,6 +11,8 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AllInclusive
 
 
 // In PlayerControls.kt
@@ -27,8 +29,10 @@ fun PlayerControls(
     onSeek: (Float) -> Unit,
     modifier: Modifier = Modifier,
     controlsEnabled: Boolean = true,
-    disabledReason: String? = null
-) {
+    disabledReason: String? = null,
+    onToggleInfinity: () -> Unit,
+    infinityMode: Boolean,
+    ) {
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -39,7 +43,7 @@ fun PlayerControls(
     }
 
     Surface(
-        modifier = Modifier.fillMaxWidth().padding(8.dp),
+        modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceContainerHigh, // match what you used in TopAppBar
         shadowElevation = 0.dp,
         tonalElevation = 0.dp
@@ -61,7 +65,7 @@ fun PlayerControls(
             )
             Text(text = "${formatTime(seekPosition)} / ${formatTime(trackDuration)}", style = MaterialTheme.typography.bodySmall)
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
                 IconButton(
@@ -110,6 +114,27 @@ fun PlayerControls(
                     enabled = controlsEnabled
                 ) {
                     Icon(painter = painterResource(id = android.R.drawable.ic_media_next), contentDescription = "Next")
+                }
+                IconButton(
+                    onClick = {
+                        if (controlsEnabled) {
+                            onToggleInfinity()
+                            coroutineScope.launch {
+                                delay(500)
+                                WebSocketManager.emit("getState")
+                            }
+                        } else disabledReason?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+                    },
+                    enabled = controlsEnabled
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.AllInclusive,
+                        contentDescription = "Infinity Playback",
+                        tint = if (infinityMode)
+                            MaterialTheme.colorScheme.primary
+                        else
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                    )
                 }
             }
         }
