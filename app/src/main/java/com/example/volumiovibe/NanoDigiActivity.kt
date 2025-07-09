@@ -418,7 +418,7 @@ class NanoDigiActivity : BaseActivity() {
                 Log.d(DEBUG_TAG, "Sendin’ POST payload: $json")
                 val body = json.toString().toRequestBody("application/json".toMediaType())
                 val request = Request.Builder()
-                    .url("http://192.168.0.250:5380/devices/0/config")
+                    .url("http://192.168.0.240:5380/devices/0/config")
                     .post(body)
                     .build()
 
@@ -462,7 +462,7 @@ class NanoDigiActivity : BaseActivity() {
             try {
                 // Fetch /devices/0
                 val configReq = Request.Builder()
-                    .url("http://192.168.0.250:5380/devices/0")
+                    .url("http://192.168.0.240:5380/devices/0")
                     .get()
                     .build()
                 val configRes = client.newCall(configReq).execute()
