@@ -42,8 +42,8 @@ import androidx.compose.material.icons.filled.MusicNote
 import org.json.JSONArray
 
 private fun setDevice(
-    profile: String,
-    device: String,
+    profile: String? = null, // Allow null for device-only changes
+    device: String? = null, // Allow null for profile-only changes
     context: android.content.Context
 ) {
     val client = OkHttpClient()
@@ -52,8 +52,13 @@ private fun setDevice(
         .host("192.168.0.250")
         .port(8080)
         .addPathSegment("set_profile_device")
-        .addQueryParameter("profile", profile)
-        .addQueryParameter("capture_device", device)
+    // Only add params if provided
+    profile?.let { urlBuilder.addQueryParameter("profile", it) }
+    device?.let { urlBuilder.addQueryParameter("capture_device", it) }
+    // Always include FIR files to avoid defaults overriding
+    urlBuilder.addQueryParameter("left_fir_file", "/home/volumio/camilladsp/filters/Links.wav")
+    urlBuilder.addQueryParameter("right_fir_file", "/home/volumio/camilladsp/filters/Rechts.wav")
+
     val request = Request.Builder()
         .get()
         .url(urlBuilder.build())
@@ -62,7 +67,7 @@ private fun setDevice(
     client.newCall(request).enqueue(object : okhttp3.Callback {
         override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
             Handler(Looper.getMainLooper()).post {
-                Toast.makeText(context, "Set profile failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "Set profile/device failed: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -70,7 +75,7 @@ private fun setDevice(
             val body = response.body?.string()
             Handler(Looper.getMainLooper()).post {
                 if (response.isSuccessful) {
-                    Toast.makeText(context, "Profile applied: $body", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Applied: $body", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(context, "Set failed: $body", Toast.LENGTH_SHORT).show()
                 }
@@ -198,11 +203,17 @@ class NanoDigiActivity : BaseActivity() {
             var volume by remember { mutableStateOf(-37f) }
             var mute by remember { mutableStateOf(false) }
             var output by remember { mutableStateOf("Shield TV") }
+            var roomCurve by remember { mutableStateOf("default") } // New state for room curves
             val outputMap = mapOf(
                 "hw:sndrpihifiberry,0,0" to "Shield TV",
                 "hw:Loopback,1,0" to "Volumio"
             )
             val reverseOutputMap = outputMap.entries.associate { it.value to it.key }
+            val roomCurveMap = mapOf(
+                "default" to "Flat",
+                "harman" to "Harman"
+            )
+            val reverseRoomCurveMap = roomCurveMap.entries.associate { it.value to it.key }
             val coroutineScope = rememberCoroutineScope()
             val context = LocalContext.current
 
@@ -251,13 +262,15 @@ class NanoDigiActivity : BaseActivity() {
                 fetchAllState(
                     coroutineScope,
                     context,
-                    outputMap
-                ) { newConfig, newSource, newVolume, newMute, newOutput ->
+                    outputMap,
+                    roomCurveMap
+                ) { newConfig, newSource, newVolume, newMute, newOutput, newRoomCurve ->
                     config = newConfig
                     source = newSource
                     volume = newVolume
                     mute = newMute
                     output = newOutput
+                    roomCurve = newRoomCurve
                 }
                 updateStateFromServer()
             }
@@ -340,7 +353,7 @@ class NanoDigiActivity : BaseActivity() {
                 // Always set output, even if already selected:
                 output = "Shield TV"
                 val dev = reverseOutputMap["Shield TV"] ?: "hw:sndrpihifiberry,0,0"
-                setDevice("default", dev, context)
+                setDevice(device = dev, context = context)
             }
 
             val onMusicPressed = {
@@ -359,7 +372,7 @@ class NanoDigiActivity : BaseActivity() {
                 // Always set output
                 output = "Volumio"
                 val dev = reverseOutputMap["Volumio"] ?: "hw:Loopback,1,0"
-                setDevice("default", dev, context)
+                setDevice(device = dev, context = context)
             }
 
             // ---- SYNC ALL STATE FROM BACKEND ----
@@ -367,13 +380,15 @@ class NanoDigiActivity : BaseActivity() {
                 fetchAllState(
                     coroutineScope,
                     context,
-                    outputMap
-                ) { newConfig, newSource, newVolume, newMute, newOutput ->
+                    outputMap,
+                    roomCurveMap
+                ) { newConfig, newSource, newVolume, newMute, newOutput, newRoomCurve ->
                     config = newConfig
                     source = newSource
                     volume = newVolume
                     mute = newMute
                     output = newOutput
+                    roomCurve = newRoomCurve
                 }
                 updateStateFromServer()
             }
@@ -404,8 +419,13 @@ class NanoDigiActivity : BaseActivity() {
                     onOutputSelected = { out ->
                         output = out
                         val dev = reverseOutputMap[out] ?: "hw:sndrpihifiberry,0,0"
-                        setDevice("default", dev, context)
-                        coroutineScope.launch { delay(250) }
+                        setDevice(device = dev, context = context)
+                    },
+                    roomCurve = roomCurve,
+                    onRoomCurveSelected = { curve ->
+                        roomCurve = curve
+                        val profile = reverseRoomCurveMap[curve] ?: "default"
+                        setDevice(profile = profile, context = context)
                     },
                     sendConfig = { v -> sendConfig(coroutineScope, context, volume = v) },
                     tvActive = tvActive,
@@ -478,7 +498,8 @@ class NanoDigiActivity : BaseActivity() {
         scope: CoroutineScope,
         context: android.content.Context,
         outputMap: Map<String, String>,
-        onState: (Int, String, Float, Boolean, String) -> Unit
+        roomCurveMap: Map<String, String>,
+        onState: (Int, String, Float, Boolean, String, String) -> Unit
     ) {
         scope.launch(Dispatchers.IO) {
             try {
@@ -505,10 +526,13 @@ class NanoDigiActivity : BaseActivity() {
                 val deviceStr = devRes.body?.string()?.trim() ?: ""
                 Log.d("NanoDigiDebug", "Fetched device: $deviceStr")
 
+                // Can't reliably fetch profile from server, so use current app state or default
+                val currentRoomCurve = roomCurveMap[roomCurveMap.keys.firstOrNull()] ?: "default"
+
                 withContext(Dispatchers.Main) {
                     val cleanDevice = deviceStr.removeSurrounding("\"")
                     val mappedOutput = outputMap[cleanDevice] ?: cleanDevice
-                    onState(preset, source, volume, mute, mappedOutput)
+                    onState(preset, source, volume, mute, mappedOutput, currentRoomCurve)
                 }
             } catch (e: Exception) {
                 Log.e("NanoDigiDebug", "fetchAllState error", e)
@@ -537,6 +561,8 @@ class NanoDigiActivity : BaseActivity() {
         onMuteToggle: () -> Unit,
         output: String,
         onOutputSelected: (String) -> Unit,
+        roomCurve: String,
+        onRoomCurveSelected: (String) -> Unit,
         sendConfig: (Float) -> Unit,
         tvActive: Boolean,
         musicActive: Boolean,
@@ -633,6 +659,31 @@ class NanoDigiActivity : BaseActivity() {
                         }
                     }
                 }
+
+                // --- Room Curves Card ---
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    ),
+                    elevation = CardDefaults.cardElevation()
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("Room Curves", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("Flat", "Harman").forEach { curve ->
+                                SelectableChip(
+                                    label = curve,
+                                    selected = roomCurve == curve,
+                                    onClick = { onRoomCurveSelected(curve) }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
 
                 // --- Preset Card ---
                 Card(
