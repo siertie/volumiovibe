@@ -212,7 +212,8 @@ class NanoDigiActivity : BaseActivity() {
             val roomCurveMap = mapOf(
                 "default" to "Flat",
                 "harman" to "Harman",
-                "b&k" to "B&K"
+                "b&k" to "B&K",
+                "noconv" to "No Convolution"
             )
             val reverseRoomCurveMap = roomCurveMap.entries.associate { it.value to it.key }
             val coroutineScope = rememberCoroutineScope()
@@ -697,6 +698,14 @@ class NanoDigiActivity : BaseActivity() {
                                     onClick = { onRoomCurveSelected(curve) }
                                 )
                             }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SelectableChip(
+                                label = "No Convolution",
+                                selected = roomCurve == "No Convolution",
+                                onClick = { onRoomCurveSelected("No Convolution") }
+                            )
                         }
                     }
                 }
