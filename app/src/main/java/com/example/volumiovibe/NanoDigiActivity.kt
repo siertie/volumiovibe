@@ -211,7 +211,8 @@ class NanoDigiActivity : BaseActivity() {
             val reverseOutputMap = outputMap.entries.associate { it.value to it.key }
             val roomCurveMap = mapOf(
                 "default" to "Flat",
-                "harman" to "Harman"
+                "harman" to "Harman",
+                "b&k" to "B&K"
             )
             val reverseRoomCurveMap = roomCurveMap.entries.associate { it.value to it.key }
             val coroutineScope = rememberCoroutineScope()
@@ -510,6 +511,7 @@ class NanoDigiActivity : BaseActivity() {
                     .build()
                 val configRes = client.newCall(configReq).execute()
                 val configBody = configRes.body?.string() ?: "{}"
+                Log.d("NanoDigiDebug", "Fetched config: $configBody")
                 val master = JSONObject(configBody).optJSONObject("master") ?: JSONObject()
 
                 val preset = master.optInt("preset", 3)
@@ -526,16 +528,32 @@ class NanoDigiActivity : BaseActivity() {
                 val deviceStr = devRes.body?.string()?.trim() ?: ""
                 Log.d("NanoDigiDebug", "Fetched device: $deviceStr")
 
-                // Can't reliably fetch profile from server, so use current app state or default
-                val currentRoomCurve = roomCurveMap[roomCurveMap.keys.firstOrNull()] ?: "default"
+                // Fetch /get_profile
+                val profileReq = Request.Builder()
+                    .url("http://192.168.0.250:8080/get_profile")
+                    .get()
+                    .build()
+                val profileRes = client.newCall(profileReq).execute()
+                val profileStr = profileRes.body?.string()?.trim() ?: "default"
+                Log.d("NanoDigiDebug", "Fetched profile raw: $profileStr, code: ${profileRes.code}")
 
                 withContext(Dispatchers.Main) {
                     val cleanDevice = deviceStr.removeSurrounding("\"")
-                    val mappedOutput = outputMap[cleanDevice] ?: cleanDevice
-                    onState(preset, source, volume, mute, mappedOutput, currentRoomCurve)
+                    val mappedOutput = outputMap[cleanDevice] ?: "Shield TV"
+                    val cleanProfile = profileStr.removeSurrounding("\"").lowercase()
+                    val mappedRoomCurve = roomCurveMap[cleanProfile] ?: "Flat"
+                    Log.d("NanoDigiDebug", "Mapped profile: $cleanProfile -> $mappedRoomCurve")
+                    if (cleanProfile !in roomCurveMap.keys) {
+                        Toast.makeText(
+                            context,
+                            "Unknown profile: $cleanProfile, defaultin’ to Flat",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                    onState(preset, source, volume, mute, mappedOutput, mappedRoomCurve)
                 }
             } catch (e: Exception) {
-                Log.e("NanoDigiDebug", "fetchAllState error", e)
+                Log.e("NanoDigiDebug", "fetchAllState fucked up: $e")
                 withContext(Dispatchers.Main) {
                     Toast.makeText(
                         context,
@@ -672,7 +690,7 @@ class NanoDigiActivity : BaseActivity() {
                         Text("Room Curves", style = MaterialTheme.typography.titleMedium)
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf("Flat", "Harman").forEach { curve ->
+                            listOf("Flat", "Harman", "B&K").forEach { curve ->
                                 SelectableChip(
                                     label = curve,
                                     selected = roomCurve == curve,
