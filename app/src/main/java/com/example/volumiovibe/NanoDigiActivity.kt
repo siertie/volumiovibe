@@ -212,6 +212,7 @@ class NanoDigiActivity : BaseActivity() {
             val roomCurveMap = mapOf(
                 "default" to "Flat",
                 "harman" to "Harman",
+                "harman_bass" to "Harman Bass",
                 "b&k" to "B&K",
                 "noconv" to "No Convolution"
             )
@@ -344,6 +345,7 @@ class NanoDigiActivity : BaseActivity() {
             val onTvPressed = {
                 if (tvActive) {
                     controlPlug("Shield TV", "off")
+                    WebSocketManager.emit("shutdown")
                 } else {
                     controlPlugs(
                         listOf(
@@ -362,6 +364,7 @@ class NanoDigiActivity : BaseActivity() {
                 if (musicActive) {
                     // Turn off Shield TV if Music is active and button pressed (turns music mode off)
                     controlPlug("Shield TV", "off")
+                    WebSocketManager.emit("shutdown")
                 } else {
                     if (tvActive) {
                         // TV mode was ON, so just turn off TV, leave Shield TV ON
@@ -705,6 +708,11 @@ class NanoDigiActivity : BaseActivity() {
                                 label = "No Convolution",
                                 selected = roomCurve == "No Convolution",
                                 onClick = { onRoomCurveSelected("No Convolution") }
+                            )
+                            SelectableChip(
+                                label = "Harman Bass",
+                                selected = roomCurve == "Harman Bass",
+                                onClick = { onRoomCurveSelected("Harman Bass") }
                             )
                         }
                     }
